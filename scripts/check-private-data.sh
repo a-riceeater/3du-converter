@@ -47,7 +47,7 @@ check_file() {
 
     case $lower in
         *.3du|*.3du.*|*.3dudb|*.3dudb.*|*.3dz|*.dots|*.dots-*|*.fieldwork|*.fieldworks|*.fieldwork.*|*.fieldworks.*|\
-        *.om|*.omz|*.omt|*.ogg|*.mp3|*.wav|*.m4a|*.aif|*.aiff|*.flac|*.zip|*.7z|*.rar|*.tar|*.tgz|*.gz|\
+        *.om|*.omz|*.omt|*.musicxml|*.mxl|*.ogg|*.mp3|*.wav|*.m4a|*.aif|*.aiff|*.flac|*.zip|*.7z|*.rar|*.tar|*.tgz|*.gz|\
         *.pkl|*.pickle|*.sqlite|*.sqlite3|*.db)
             reject "$f" "private or binary drill-related extension"; return ;;
     esac
@@ -78,7 +78,7 @@ check_file() {
         *.rs|*.md|*.sh|*.ps1|*.toml|*.yml|*.yaml|*.h|*.swift|*.txt.md) ;;
         *)
             if grep -a -q -E '"(positions_xy|count_times_seconds|source_magic|marcherId|xSteps|ySteps)"' "$tmp" \
-                || grep -a -q -E 'org\.fieldwork\.show' "$tmp"; then
+                || grep -a -q -E 'org\.fieldwork\.show|<score-partwise' "$tmp"; then
                 case $f in
                     tests/fixtures/synthetic/*)
                         grep -a -q '"x-synthetic-fixture": *true' "$tmp" \
