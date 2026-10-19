@@ -1,0 +1,95 @@
+# ============================================================================
+# PRIVATE DRILL DATA — NEVER COMMIT
+# Real drill files belong to real ensembles. Keep them outside the working tree
+# when possible; these rules are a second line of defence, not the first.
+# Patterns are case-insensitive via character classes so they also match on
+# case-sensitive filesystems. Patterns without a slash match at any depth.
+# ============================================================================
+
+# Pyware / UDB source drills
+*.[3][dD][uU]
+*.[3][dD][uU][dD][bB]
+*.[3][dD][uU].*
+*.[3][dD][uU][dD][bB].*
+
+# Converted outputs (may contain real drill)
+*.[dD][oO][tT][sS]
+*.[dD][oO][tT][sS]-journal
+*.[dD][oO][tT][sS]-wal
+*.[dD][oO][tT][sS]-shm
+*.[fF][iI][eE][lL][dD][wW][oO][rR][kK]
+*.[fF][iI][eE][lL][dD][wW][oO][rR][kK][sS]
+*.[fF][iI][eE][lL][dD][wW][oO][rR][kK].*
+*.[fF][iI][eE][lL][dD][wW][oO][rR][kK][sS].*
+*.[oO][mM]
+*.[oO][mM][zZ]
+*.[oO][mM][tT]
+
+# Extracted / intermediate drill datasets
+*_[eE][xX][tT][rR][aA][cC][tT][eE][dD]*
+*[eE][xX][tT][rR][aA][cC][tT][eE][dD].[jJ][sS][oO][nN]
+*[iI][nN][tT][eE][rR][mM][eE][dD][iI][aA][tT][eE]*.[jJ][sS][oO][nN]
+*.[dD][rR][iI][lL][lL].[jJ][sS][oO][nN]
+[dD][rR][iI][lL][lL]*.[jJ][sS][oO][nN]
+
+# Extraction archives
+*.[zZ][iI][pP]
+*.7[zZ]
+*.[rR][aA][rR]
+*.[tT][aA][rR]
+*.[tT][gG][zZ]
+*.[gG][zZ]
+
+# Associated show music
+*.[oO][gG][gG]
+*.[mM][pP]3
+*.[wW][aA][vV]
+*.[mM]4[aA]
+*.[aA][iI][fF][fF]
+*.[aA][iI][fF]
+*.[fF][lL][aA][cC]
+
+# Private test directories (any depth)
+[pP]rivate/
+[pP]rivate-*/
+[sS]amples/
+[rR]eal-samples/
+[rR]eal_samples/
+[dD]rills/
+local-samples/
+out/
+output/
+
+# Temporary files
+*.tmp
+*.[tT][mM][pP]
+*.partial
+*.bak
+*.swp
+*~
+.~*
+Thumbs.db
+.DS_Store
+
+# ============================================================================
+# Build artefacts
+# ============================================================================
+/target/
+**/target/
+*.pdb
+node_modules/
+
+# Synthetic fixtures are generated in tests at runtime. The one exception is
+# tests/fixtures/synthetic/, which may hold small hand-made files; anything in
+# there must pass scripts/check-private-data.
+!tests/fixtures/synthetic/
+
+# Analysis dumps that may hold decoded drill data
+*.pkl
+*.pickle
+*.sqlite
+*.sqlite3
+*.db
+
+# Local list of private terms (ensemble names, titles) the safety check blocks
+.private-denylist

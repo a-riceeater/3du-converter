@@ -1,0 +1,3 @@
+#!/bin/sh
+# Installed by scripts/install-hooks.sh (git config core.hooksPath .githooks).
+exec "$(git rev-parse --show-toplevel)/scripts/check-private-data.sh"
