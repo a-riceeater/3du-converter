@@ -21,15 +21,19 @@ fn archive_layout_and_manifest() {
     let bytes = build_archive(&p, &plan(&p)).unwrap();
     let members = zip::read(&bytes).unwrap();
     let paths: Vec<_> = members.iter().map(|m| m.0.as_str()).collect();
-    assert_eq!(paths, ["manifest.json", "show.sqlite", "extensions/org.3du-converter.provenance/provenance.json"]);
+    assert_eq!(
+        paths,
+        ["manifest.json", "show.sqlite", "extensions/org.3du-converter.props/props.json", "extensions/org.3du-converter.provenance/provenance.json"]
+    );
     let manifest: serde_json::Value = serde_json::from_slice(&members[0].1).unwrap();
     assert_eq!(manifest["format"], "org.fieldwork.show");
     assert_eq!(manifest["formatVersion"]["major"], 1);
     assert_eq!(manifest["requiredCapabilities"][0], "drill.core.v1");
-    assert_eq!(manifest["extensions"][0]["required"], false);
+    assert_eq!(manifest["extensions"][0]["namespace"], "org.3du-converter.props");
+    assert_eq!(manifest["extensions"][1]["required"], false);
     let report = validate_bytes(&bytes).unwrap();
     assert_eq!(report.schema_version, 4);
-    assert_eq!(report.performers, 4);
+    assert_eq!(report.performers, 3, "the prop is not a performer");
     assert_eq!(report.sets, 4);
     assert_eq!(report.events, 16);
     assert!((report.duration_seconds - 7.0).abs() < 1e-9);
@@ -75,11 +79,31 @@ fn positions_timing_and_sets() {
     let measures: Vec<(i64, i64)> = db.prepare("SELECT number, meter_numerator FROM measure ORDER BY ordinal").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
     assert_eq!(measures, [(1, 4), (2, 4), (3, 4), (4, 4)]);
     let unique: i64 = db.query_row("SELECT count(DISTINCT label) FROM performer", [], |r| r.get(0)).unwrap();
-    assert_eq!(unique, 4);
+    assert_eq!(unique, 3);
     let note: String = db.query_row("SELECT text FROM field_note", [], |r| r.get(0)).unwrap();
     assert_eq!(note, "Opening");
-    let props: String = db.query_row("SELECT s.name FROM section s JOIN performer p ON p.section_id = s.id WHERE p.label = 'unlabeled'", [], |r| r.get(0)).unwrap();
-    assert_eq!(props, "Props");
+    let props: i64 = db.query_row("SELECT count(*) FROM performer WHERE label = 'unlabeled'", [], |r| r.get(0)).unwrap();
+    assert_eq!(props, 0);
+}
+
+#[test]
+fn props_are_preserved_in_an_extension() {
+    let p = project();
+    let members = zip::read(&build_archive(&p, &plan(&p)).unwrap()).unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(&members.iter().find(|m| m.0.ends_with("props.json")).unwrap().1).unwrap();
+    assert_eq!(doc["layoutVersion"], 1);
+    assert_eq!(doc["sets"].as_array().unwrap().len(), 4);
+    let prop = &doc["props"][0];
+    assert_eq!(prop["label"], "unlabeled");
+    assert_eq!(prop["sourceId"], "0009090900000004");
+    assert_eq!(prop["stationary"], true);
+    assert_eq!(prop["shapeCode"], 2);
+    let size: Vec<f64> = prop["sizeMeters"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    assert!((size[0] - 4.572).abs() < 1e-9 && size[1] == 0.0 && (size[2] - 4.572).abs() < 1e-9);
+    // Behind the back sideline (2.5 yd past it): y = (26.25 + 2.5) yd from center.
+    let y = prop["placements"][0]["y"].as_f64().unwrap();
+    assert!((y - 28.75 * 0.9144).abs() < 1e-6, "{y}");
+    assert!(plan(&p).iter().any(|d| d.code == "props_in_extension"));
 }
 
 #[test]

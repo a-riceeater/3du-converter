@@ -4,6 +4,7 @@
 //! `packages/DrillDocument`. Units are meters from field center (+x audience right,
 //! +y toward the back sideline), durations in seconds, IDs uppercase UUIDs.
 
+pub mod props;
 pub mod zip;
 
 use std::collections::BTreeMap;
@@ -13,7 +14,7 @@ use rusqlite::{params, Connection, DatabaseName};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use three_du_core::export::{enforce, stable_uuid, write_atomic, ExportError, LossPolicy};
-use three_du_core::{AnnotationKind, Diagnostic, DrillProject, PerformerKind, Severity};
+use three_du_core::{AnnotationKind, Diagnostic, DrillProject, Performer, PerformerKind, Severity};
 
 pub const FORMAT: &str = "org.fieldwork.show";
 pub const SCHEMA_VERSION: i32 = 4;
@@ -115,7 +116,7 @@ fn db_err(e: rusqlite::Error) -> ExportError {
 /// Every diagnostic a `.fieldwork` export of `p` produces.
 pub fn plan(p: &DrillProject) -> Vec<Diagnostic> {
     let mut d = p.diagnostics.clone();
-    let renamed = unique_labels(p).iter().zip(&p.performers).filter(|(a, q)| **a != q.label).count();
+    let renamed = unique_labels(p).iter().zip(marchers(p)).filter(|(a, q)| **a != q.label).count();
     if renamed > 0 {
         d.push(Diagnostic::new(Severity::Warning, "labels_made_unique", format!("{renamed} duplicate performer label(s) were suffixed to make them unique")));
     }
@@ -142,19 +143,30 @@ pub fn plan(p: &DrillProject) -> Vec<Diagnostic> {
             "the audio file name is recorded in the provenance extension; no audio is embedded",
         ));
     }
-    if p.performers.iter().any(|q| q.kind == PerformerKind::Prop) {
-        d.push(Diagnostic::new(Severity::Info, "props_as_performers", "props are exported as performers in a \"Props\" section"));
+    let props = p.performers.len() - marchers(p).len();
+    if props > 0 {
+        d.push(Diagnostic::new(
+            Severity::Info,
+            "props_in_extension",
+            format!("{props} prop(s) are not performers; they are kept in the {} extension until Fieldwork supports props", props::NAMESPACE),
+        ));
     }
     d
 }
 
-/// Labels made unique by suffixing repeats: "unlabeled", "unlabeled (2)", …
+/// Performers written to the roster: everyone except props (see [`props`]).
+fn marchers(p: &DrillProject) -> Vec<&Performer> {
+    p.performers.iter().filter(|q| q.kind != PerformerKind::Prop).collect()
+}
+
+/// Roster labels made unique by suffixing repeats: "T1", "T1 (2)", …
 fn unique_labels(p: &DrillProject) -> Vec<String> {
+    let roster = marchers(p);
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
-    let mut taken: std::collections::HashSet<String> = p.performers.iter().map(|q| q.label.clone()).collect();
+    let mut taken: std::collections::HashSet<String> = roster.iter().map(|q| q.label.clone()).collect();
     let mut first = std::collections::HashSet::new();
-    p.performers
-        .iter()
+    roster
+        .into_iter()
         .map(|q| {
             if first.insert(q.label.clone()) {
                 return q.label.clone();
@@ -278,17 +290,16 @@ pub fn build_database(p: &DrillProject) -> Result<Vec<u8>, ExportError> {
         put("y", y_back, "back sideline".into(), "major")?;
     }
 
-    // Roster: one section per label prefix, props grouped together.
+    // Roster: one section per label prefix. Props are handled by `props`, not here.
+    let roster = marchers(p);
     let labels = unique_labels(p);
     let mut sections: Vec<(String, String)> = Vec::new();
-    let section_of: Vec<usize> = p
-        .performers
+    let section_of: Vec<usize> = roster
         .iter()
         .map(|q| {
-            let (name, prefix) = match (&q.section, q.kind) {
-                (_, PerformerKind::Prop) => ("Props".to_string(), "Prop".to_string()),
-                (Some(s), _) => (s.clone(), label_prefix(&q.label)),
-                (None, _) => (label_prefix(&q.label), label_prefix(&q.label)),
+            let (name, prefix) = match &q.section {
+                Some(s) => (s.clone(), label_prefix(&q.label)),
+                None => (label_prefix(&q.label), label_prefix(&q.label)),
             };
             match sections.iter().position(|s| s.0 == name) {
                 Some(i) => i,
@@ -307,8 +318,8 @@ pub fn build_database(p: &DrillProject) -> Result<Vec<u8>, ExportError> {
         let mut st = tx
             .prepare("INSERT INTO performer (id, ordinal, label, section_id, name, notes, symbol) VALUES (?1, ?2, ?3, ?4, NULL, '', NULL)")
             .map_err(db_err)?;
-        for (q, label) in p.performers.iter().zip(&labels) {
-            st.execute(params![uid("performer", &q.source_id), q.index as i64, label, uid("section", &sections[section_of[q.index]].0)]).map_err(db_err)?;
+        for (ordinal, (q, label)) in roster.iter().zip(&labels).enumerate() {
+            st.execute(params![uid("performer", &q.source_id), ordinal as i64, label, uid("section", &sections[section_of[ordinal]].0)]).map_err(db_err)?;
         }
     }
 
@@ -386,7 +397,7 @@ pub fn build_database(p: &DrillProject) -> Result<Vec<u8>, ExportError> {
             if s.index > 0 {
                 ts.execute(params![uid("transition", &s.index.to_string()), set_id]).map_err(db_err)?;
             }
-            for q in &p.performers {
+            for q in &roster {
                 let pid = uid("performer", &q.source_id);
                 match p.meters(q.index, s.start_count as usize) {
                     Some((x, y)) => ps.execute(params![set_id, pid, "placed", x, y, 0.0, 0.0]),
@@ -448,22 +459,29 @@ pub fn build_archive(p: &DrillProject, diags: &[Diagnostic]) -> Result<Vec<u8>, 
     let db = build_database(p)?;
     let ext_path = format!("extensions/{EXTENSION_NAMESPACE}/provenance.json");
     let ext = provenance_json(p, diags);
+    // Extension members are written sorted by path, after the database.
+    let mut extensions = vec![(EXTENSION_NAMESPACE, ext_path, ext)];
+    if let Some((path, bytes)) = props::extension_member(p) {
+        extensions.push((props::NAMESPACE, path, bytes));
+    }
+    extensions.sort_by(|a, b| a.1.cmp(&b.1));
+    let mut members = vec![Member { bytes: db.len() as u64, path: "show.sqlite".into(), sha256: sha_hex(&db) }];
+    members.extend(extensions.iter().map(|(_, path, bytes)| Member { bytes: bytes.len() as u64, path: path.clone(), sha256: sha_hex(bytes) }));
     let manifest = Manifest {
         capabilities: vec!["drill.core.v1".into(), "timing.anchors.v1".into()],
-        extensions: vec![ExtensionEntry { namespace: EXTENSION_NAMESPACE.into(), required: false }],
+        extensions: extensions.iter().map(|(ns, _, _)| ExtensionEntry { namespace: ns.to_string(), required: false }).collect(),
         format: FORMAT.into(),
         format_version: Version { major: 1, minor: 0 },
-        members: vec![
-            Member { bytes: db.len() as u64, path: "show.sqlite".into(), sha256: sha_hex(&db) },
-            Member { bytes: ext.len() as u64, path: ext_path.clone(), sha256: sha_hex(&ext) },
-        ],
+        members,
         min_reader_version: Version { major: 1, minor: 0 },
         required_capabilities: vec!["drill.core.v1".into()],
         show_id: stable_uuid("fieldwork/show", &format!("{}/", p.metadata.source.sha256)),
         writer: WRITER.into(),
     };
     let manifest_bytes = serde_json::to_vec_pretty(&manifest).unwrap();
-    zip::write(&[("manifest.json".into(), manifest_bytes), ("show.sqlite".into(), db), (ext_path, ext)]).map_err(ExportError::Validation)
+    let mut files = vec![("manifest.json".to_string(), manifest_bytes), ("show.sqlite".to_string(), db)];
+    files.extend(extensions.into_iter().map(|(_, path, bytes)| (path, bytes)));
+    zip::write(&files).map_err(ExportError::Validation)
 }
 
 /// Opens serialized database bytes read-only, entirely in memory.
