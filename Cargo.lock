@@ -486,6 +486,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "three-du-ffi"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "three-du-core",
+ "three-du-fieldwork",
+ "three-du-openmarch",
+]
+
+[[package]]
 name = "three-du-fieldwork"
 version = "0.1.0"
 dependencies = [
