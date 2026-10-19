@@ -386,6 +386,69 @@ pub fn infer_sets_from_motion(project: &mut DrillProject) {
     ));
 }
 
+/// Inserts subsets inside every non-straight move at the counts where some performer
+/// changes direction or speed. Exporters interpolate straight lines between sets, so the
+/// result reproduces every stored count exactly, at the cost of extra (derived) subsets.
+/// Returns the number of subsets added.
+pub fn split_curved_moves(project: &mut DrillProject) -> usize {
+    let mut out: Vec<DrillSet> = Vec::with_capacity(project.sets.len());
+    let mut added = 0;
+    for (i, set) in project.sets.iter().enumerate() {
+        if i > 0 && !set.straight_transition {
+            let (a, b) = (project.sets[i - 1].start_count as usize, set.start_count as usize);
+            let mut prev = a;
+            let mut k = 0;
+            for c in a + 1..b {
+                let bends = project.positions.iter().any(|t| !is_linear(&t.xy, prev, c + 1));
+                if bends {
+                    k += 1;
+                    out.push(DrillSet {
+                        index: 0,
+                        source_id: String::new(),
+                        name: format!("{}~{}", set.name, k),
+                        rehearsal_mark: None,
+                        measures_text: String::new(),
+                        measure_range: None,
+                        start_count: c as u32,
+                        counts: (c - prev) as u32,
+                        is_subset: true,
+                        tab_type: "Derived".into(),
+                        color: None,
+                        straight_transition: true,
+                        nonlinear_performers: 0,
+                        provenance: Provenance::Derived,
+                    });
+                    prev = c;
+                    added += 1;
+                }
+            }
+            let mut s = set.clone();
+            s.counts = (b - prev) as u32;
+            s.straight_transition = true;
+            s.nonlinear_performers = 0;
+            out.push(s);
+        } else {
+            out.push(set.clone());
+        }
+    }
+    for (i, s) in out.iter_mut().enumerate() {
+        s.index = i;
+    }
+    let remap: HashMap<u32, usize> = out.iter().map(|s| (s.start_count, s.index)).collect();
+    for a in &mut project.annotations {
+        a.set_index = remap.get(&a.count).copied();
+    }
+    project.sets = out;
+    if added > 0 {
+        project.diagnostics.push(Diagnostic::new(
+            Severity::Warning,
+            "curve_subsets_added",
+            format!("{added} derived subset(s) were inserted inside curved moves so every count is reproduced; they are not designer pages"),
+        ));
+    }
+    added
+}
+
 fn is_linear(xy: &[Option<[f32; 2]>], a: usize, b: usize) -> bool {
     if b <= a || b >= xy.len() {
         return true;

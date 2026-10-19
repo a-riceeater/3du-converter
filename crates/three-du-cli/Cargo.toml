@@ -1,0 +1,19 @@
+[package]
+name = "three-du-cli"
+description = "Command-line interface for 3du-converter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "3du-converter"
+path = "src/main.rs"
+
+[dependencies]
+three-du-core.workspace = true
+three-du-openmarch.workspace = true
+three-du-fieldwork.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true

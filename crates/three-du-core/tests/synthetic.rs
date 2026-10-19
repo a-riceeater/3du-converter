@@ -193,6 +193,30 @@ fn deterministic_and_round_trips_through_json() {
 }
 
 #[test]
+fn curved_moves_can_be_split_exactly() {
+    let mut p = project();
+    let added = three_du_core::convert::split_curved_moves(&mut p);
+    // The quarter circle runs over counts 9..16 and bends at every count.
+    assert_eq!(added, 6);
+    assert!(p.sets.iter().all(|s| s.straight_transition));
+    let derived: Vec<_> = p.sets.iter().filter(|s| s.provenance == Provenance::Derived).map(|s| s.name.as_str()).collect();
+    assert_eq!(derived, ["2A~1", "2A~2", "2A~3", "3~1", "3~2", "3~3"]);
+    // Every stored count now lies on a straight segment between consecutive sets.
+    for w in p.sets.windows(2) {
+        let (a, b) = (w[0].start_count as usize, w[1].start_count as usize);
+        for t in &p.positions {
+            for c in a + 1..b {
+                let (p0, p1, pc) = (t.xy[a].unwrap(), t.xy[b].unwrap(), t.xy[c].unwrap());
+                let f = (c - a) as f32 / (b - a) as f32;
+                assert!((p0[0] + (p1[0] - p0[0]) * f - pc[0]).abs() < 1e-3);
+                assert!((p0[1] + (p1[1] - p0[1]) * f - pc[1]).abs() < 1e-3);
+            }
+        }
+    }
+    assert_eq!(p.annotations[1].set_index, Some(p.sets.len() - 1));
+}
+
+#[test]
 fn page_map_and_motion_inference() {
     let raw = sample_show();
     let mut no_sets = raw.clone();

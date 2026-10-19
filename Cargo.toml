@@ -4,7 +4,7 @@ members = [
     "crates/three-du-core",
     "crates/three-du-openmarch",
     "crates/three-du-fieldwork",
-    # "crates/three-du-cli",
+    "crates/three-du-cli",
     # "crates/three-du-ffi",
 ]
 
