@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "crates/three-du-core",
-    # "crates/three-du-openmarch",
+    "crates/three-du-openmarch",
     # "crates/three-du-fieldwork",
     # "crates/three-du-cli",
     # "crates/three-du-ffi",
@@ -20,7 +20,7 @@ three-du-core = { path = "crates/three-du-core" }
 three-du-openmarch = { path = "crates/three-du-openmarch" }
 three-du-fieldwork = { path = "crates/three-du-fieldwork" }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 thiserror = "1"
 sha2 = "0.10"
 crc32fast = "1"

@@ -10,6 +10,7 @@
 pub mod convert;
 pub mod detect;
 pub mod error;
+pub mod export;
 pub mod field;
 pub mod model;
 pub mod raw;
