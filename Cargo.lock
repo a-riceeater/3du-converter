@@ -464,14 +464,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "three-du-audio"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror",
+ "three-du-core",
+]
+
+[[package]]
 name = "three-du-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
  "serde",
  "serde_json",
+ "three-du-audio",
  "three-du-core",
  "three-du-fieldwork",
+ "three-du-musicxml",
  "three-du-openmarch",
 ]
 
@@ -492,6 +503,7 @@ dependencies = [
  "serde_json",
  "three-du-core",
  "three-du-fieldwork",
+ "three-du-musicxml",
  "three-du-openmarch",
 ]
 
@@ -504,6 +516,13 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "three-du-core",
+]
+
+[[package]]
+name = "three-du-musicxml"
+version = "0.1.0"
+dependencies = [
  "three-du-core",
 ]
 

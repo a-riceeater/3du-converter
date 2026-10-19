@@ -4,6 +4,8 @@ members = [
     "crates/three-du-core",
     "crates/three-du-openmarch",
     "crates/three-du-fieldwork",
+    "crates/three-du-audio",
+    "crates/three-du-musicxml",
     "crates/three-du-cli",
     "crates/three-du-ffi",
 ]
@@ -19,6 +21,8 @@ rust-version = "1.75"
 three-du-core = { path = "crates/three-du-core" }
 three-du-openmarch = { path = "crates/three-du-openmarch" }
 three-du-fieldwork = { path = "crates/three-du-fieldwork" }
+three-du-audio = { path = "crates/three-du-audio" }
+three-du-musicxml = { path = "crates/three-du-musicxml" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 thiserror = "1"

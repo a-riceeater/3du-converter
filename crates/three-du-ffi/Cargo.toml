@@ -14,4 +14,5 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 three-du-core.workspace = true
 three-du-openmarch.workspace = true
 three-du-fieldwork.workspace = true
+three-du-musicxml.workspace = true
 serde_json.workspace = true

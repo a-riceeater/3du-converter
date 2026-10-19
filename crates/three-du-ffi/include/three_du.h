@@ -49,7 +49,8 @@ enum {
     TDU_FORMAT_FIELDWORK = 3,
     TDU_FORMAT_OM = 4,
     TDU_FORMAT_OMZ = 5,
-    TDU_FORMAT_JSON = 6
+    TDU_FORMAT_JSON = 6,
+    TDU_FORMAT_MUSICXML = 7     /* count track on the drill's clock */
 };
 
 enum {

@@ -37,6 +37,8 @@ pub const TDU_FORMAT_FIELDWORK: i32 = 3;
 pub const TDU_FORMAT_OM: i32 = 4;
 pub const TDU_FORMAT_OMZ: i32 = 5;
 pub const TDU_FORMAT_JSON: i32 = 6;
+/// MusicXML count track on the drill's own clock (no recording).
+pub const TDU_FORMAT_MUSICXML: i32 = 7;
 
 pub const TDU_FLAG_STRICT: u32 = 1;
 pub const TDU_FLAG_ALLOW_LOSSY: u32 = 2;
@@ -264,6 +266,16 @@ pub unsafe extern "C" fn tdu_export(
                 three_du_core::export::write_atomic(&path, text.as_bytes(), overwrite, |_| Ok(()))?;
                 Ok(p.diagnostics.clone())
             }),
+            TDU_FORMAT_MUSICXML => {
+                let mut diags = p.diagnostics.clone();
+                three_du_musicxml::build(p, &three_du_musicxml::MusicXmlOptions::default(), &mut diags)
+                    .map_err(ExportError::Unsupported)
+                    .and_then(|xml| {
+                        three_du_core::export::enforce(policy, &diags)?;
+                        three_du_core::export::write_atomic(&path, xml.as_bytes(), overwrite, |_| Ok(()))?;
+                        Ok(diags)
+                    })
+            }
             _ => {
                 set_error(out_error, TDU_ERR_INVALID_ARGUMENT, format!("unknown export format {format}"));
                 return TDU_ERR_INVALID_ARGUMENT;

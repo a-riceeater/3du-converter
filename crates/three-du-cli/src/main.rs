@@ -59,6 +59,16 @@ enum Command {
         policy: PolicyArgs,
         #[command(flatten)]
         source: SourceArgs,
+        #[command(flatten)]
+        audio: AudioArgs,
+    },
+    /// Find where the drill sits in a recording (writes nothing except --click-check).
+    Align {
+        input: PathBuf,
+        #[command(flatten)]
+        source: SourceArgs,
+        #[command(flatten)]
+        audio: AudioArgs,
     },
     /// Write the decoded drill as intermediate JSON.
     Extract {
@@ -87,6 +97,25 @@ enum OutputFormat {
     Omz,
     /// Intermediate JSON (same as `extract`)
     Json,
+    /// MusicXML count track: measures, meters, tempos, rehearsal marks, sets
+    #[value(alias = "xml", alias = "mxl")]
+    Musicxml,
+}
+
+#[derive(Args, Default)]
+struct AudioArgs {
+    /// The show's recording (.wav). Used to align the count track and checked for length.
+    #[arg(long, value_name = "FILE")]
+    audio: Option<PathBuf>,
+    /// Audio time (s) of count 0, overriding automatic alignment.
+    #[arg(long, value_name = "SECONDS", allow_hyphen_values = true)]
+    audio_offset: Option<f64>,
+    /// Follow the recording beat by beat (live performances drift from the drill's tempo).
+    #[arg(long, requires = "audio")]
+    follow_audio: bool,
+    /// Write the recording with a click on every aligned beat, to check the alignment by ear.
+    #[arg(long, value_name = "FILE", requires = "audio")]
+    click_check: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -303,7 +332,30 @@ fn run(command: Command, ui: &Ui) -> Result<serde_json::Value, Failure> {
             ui.diagnostics(&p.diagnostics);
             Ok(json!({"output": output, "diagnostics": p.diagnostics}))
         }
-        Command::Convert { input, format, output, policy, source } => {
+        Command::Align { input, source, audio } => {
+            let p = load(&input, &source, ui)?;
+            if audio.audio.is_none() {
+                return Err(Failure { code: exit::INVALID_INPUT, kind: "missing_audio", message: "align needs --audio FILE".into(), diagnostics: vec![] });
+            }
+            let sync = audio_sync(&p, &audio, ui, true)?;
+            if !ui.json && !ui.quiet {
+                println!("audio:            {:.3} s", sync.audio_seconds);
+                for (k, v) in &sync.notes {
+                    println!("{:<18}{v}", format!("{k}:"));
+                }
+                if let Some(times) = &sync.tracked {
+                    println!("tracked beats vs. the drill clock at each set:");
+                    let beats = three_du_audio::drill_beats(&p);
+                    for (i, s) in p.sets.iter().enumerate().skip(1) {
+                        let k = s.start_count as usize - 1;
+                        println!("  set #{i:<3} count {:>4}  drill {:8.3} s  audio {:8.3} s  shift {:+.3} s", s.start_count, beats[k], times[k], times[k] - beats[k]);
+                    }
+                }
+            }
+            ui.diagnostics(&sync.diagnostics);
+            Ok(json!({"notes": sync.notes, "tracked_beats": sync.tracked, "diagnostics": sync.diagnostics}))
+        }
+        Command::Convert { input, format, output, policy, source, audio } => {
             let mut p = load(&input, &source, ui)?;
             let loss = if policy.strict {
                 LossPolicy::Strict
@@ -329,6 +381,26 @@ fn run(command: Command, ui: &Ui) -> Result<serde_json::Value, Failure> {
                     three_du_core::export::enforce(loss, &p.diagnostics)?;
                     write_json(&p, &output, policy.overwrite)?;
                     p.diagnostics.clone()
+                }
+                OutputFormat::Musicxml => {
+                    let sync = audio_sync(&p, &audio, ui, false)?;
+                    let opts = three_du_musicxml::MusicXmlOptions {
+                        audio: audio.audio.as_ref().map(|a| three_du_musicxml::AudioInfo {
+                            file_name: a.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                            duration_seconds: sync.audio_seconds,
+                        }),
+                        offset_seconds: sync.offset,
+                        beat_times: if audio.follow_audio { sync.tracked.clone() } else { None },
+                        notes: sync.notes.clone(),
+                    };
+                    let mut diags = p.diagnostics.clone();
+                    diags.extend(sync.diagnostics.iter().cloned());
+                    let xml = three_du_musicxml::build(&p, &opts, &mut diags).map_err(ExportError::Unsupported)?;
+                    three_du_core::export::enforce(loss, &diags)?;
+                    write_atomic(&output, xml.as_bytes(), policy.overwrite, |tmp| {
+                        three_du_musicxml::check_well_formed(&std::fs::read_to_string(tmp)?).map_err(ExportError::Validation)
+                    })?;
+                    diags
                 }
             };
             ui.info(format!("wrote and validated {}", output.display()));
@@ -367,6 +439,87 @@ fn run(command: Command, ui: &Ui) -> Result<serde_json::Value, Failure> {
             Ok(json!({"format": format, "report": report}))
         }
     }
+}
+
+struct AudioSync {
+    audio_seconds: f64,
+    /// Audio time of count 0 used for drill-clock timing.
+    offset: f64,
+    /// Audio time of every beat when beat tracking ran.
+    tracked: Option<Vec<f64>>,
+    notes: Vec<(String, String)>,
+    diagnostics: Vec<Diagnostic>,
+}
+
+/// Reads the recording (if any) and decides how the drill clock maps onto it. An offset
+/// found automatically is applied only when the alignment is confident.
+fn audio_sync(p: &DrillProject, args: &AudioArgs, ui: &Ui, always_track: bool) -> Result<AudioSync, Failure> {
+    let mut sync = AudioSync { audio_seconds: 0.0, offset: args.audio_offset.unwrap_or(0.0), tracked: None, notes: vec![], diagnostics: vec![] };
+    let Some(path) = &args.audio else {
+        if args.audio_offset.is_none() {
+            sync.diagnostics.push(Diagnostic::new(Severity::Info, "no_audio", "no recording given; count 0 is placed at time 0"));
+        }
+        return Ok(sync);
+    };
+    let audio = three_du_audio::read_file(path)
+        .map_err(|e| Failure { code: exit::INVALID_INPUT, kind: "bad_audio", message: format!("{}: {e}", path.display()), diagnostics: vec![] })?;
+    sync.audio_seconds = audio.duration_seconds();
+    ui.info(format!("aligning with {:.1} s of audio…", sync.audio_seconds));
+    let global = three_du_audio::align_project(p, &audio);
+    sync.notes.push(("alignment-estimate-seconds".into(), format!("{:.4}", global.offset_seconds)));
+    sync.notes.push(("alignment-confident".into(), global.confident.to_string()));
+    sync.notes.push(("alignment-beat-hits".into(), format!("{:.2} (chance {:.2})", global.beat_hit_rate, global.chance_hit_rate)));
+    match args.audio_offset {
+        Some(o) => sync.notes.push(("audio-offset-seconds".into(), format!("{o:.4} (given)"))),
+        None if global.confident => {
+            sync.offset = global.offset_seconds;
+            sync.notes.push(("audio-offset-seconds".into(), format!("{:.4} (automatic)", global.offset_seconds)));
+        }
+        None => {
+            sync.notes.push(("audio-offset-seconds".into(), "0 (estimate not confident, not applied)".into()));
+            sync.diagnostics.push(Diagnostic::new(
+                Severity::Warning,
+                "alignment_not_confident",
+                format!(
+                    "automatic alignment is not confident (best offset {:+.3} s); count 0 is placed at the start of the audio. Check with --click-check, then pass --audio-offset or --follow-audio",
+                    global.offset_seconds
+                ),
+            ));
+        }
+    }
+    if args.follow_audio || always_track {
+        let beats = three_du_audio::drill_beats(p);
+        let track = three_du_audio::align::track_beats(&audio, &beats, args.audio_offset.unwrap_or(global.offset_seconds), 2.5);
+        sync.notes.push((
+            "beat-tracking".into(),
+            format!(
+                "onset rate {:.2} (chance {:.2}), median tempo deviation {:.1}%, confident {}",
+                track.onset_rate,
+                track.chance_onset_rate,
+                (track.median_tempo_deviation - 1.0) * 100.0,
+                track.confident
+            ),
+        ));
+        if args.follow_audio && !track.confident {
+            sync.diagnostics.push(Diagnostic::new(
+                Severity::Lossy,
+                "beat_tracking_not_confident",
+                "beat tracking could not be confirmed against chance; the followed tempos may be wrong. Verify with --click-check",
+            ));
+        }
+        sync.tracked = Some(track.times);
+    }
+    if let Some(out) = &args.click_check {
+        let times: Vec<f64> = match &sync.tracked {
+            Some(t) if args.follow_audio || always_track => t.clone(),
+            _ => three_du_audio::drill_beats(p).iter().map(|b| b + sync.offset).collect(),
+        };
+        let accents: Vec<usize> = p.sets.iter().filter(|s| s.start_count >= 1).map(|s| s.start_count as usize - 1).collect();
+        let mix = three_du_audio::align::click_check(&audio, &times, &accents);
+        write_atomic(out, &three_du_audio::wav::write_pcm16(&mix, audio.sample_rate), true, |_| Ok(()))?;
+        ui.info(format!("wrote click check to {} (accented clicks mark sets)", out.display()));
+    }
+    Ok(sync)
 }
 
 fn write_json(p: &DrillProject, output: &Path, overwrite: bool) -> Result<(), Failure> {
