@@ -36,7 +36,7 @@ fn archive_layout_and_manifest() {
     assert_eq!(report.performers, 3, "the prop is not a performer");
     assert_eq!(report.sets, 4);
     assert_eq!(report.events, 16);
-    assert!((report.duration_seconds - 7.0).abs() < 1e-9);
+    assert!((report.duration_seconds - 7.125).abs() < 1e-9);
 }
 
 #[test]
@@ -75,7 +75,7 @@ fn positions_timing_and_sets() {
     assert_eq!((mark.as_str(), marker.as_str()), ("B", "3-4"));
     let first: f64 = db.query_row("SELECT baseline_seconds FROM timing_event WHERE ordinal = 0", [], |r| r.get(0)).unwrap();
     let ninth: f64 = db.query_row("SELECT baseline_seconds FROM timing_event WHERE ordinal = 8", [], |r| r.get(0)).unwrap();
-    assert_eq!((first, ninth), (0.5, 0.375));
+    assert_eq!((first, ninth), (0.5, 0.5));
     let measures: Vec<(i64, i64)> = db.prepare("SELECT number, meter_numerator FROM measure ORDER BY ordinal").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
     assert_eq!(measures, [(1, 4), (2, 4), (3, 4), (4, 4)]);
     let unique: i64 = db.query_row("SELECT count(DISTINCT label) FROM performer", [], |r| r.get(0)).unwrap();

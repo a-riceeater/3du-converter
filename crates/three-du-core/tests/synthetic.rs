@@ -62,7 +62,8 @@ fn timing_and_tempo() {
     let t = &p.timeline;
     assert_eq!(t.count_len(), 20);
     assert!((t.duration_of(1) - 0.5).abs() < 1e-12);
-    assert!((t.duration_of(9) - 0.375).abs() < 1e-12);
+    assert!((t.duration_of(9) - 0.5).abs() < 1e-12, "count 8 still runs at 120 BPM");
+    assert!((t.duration_of(10) - 0.375).abs() < 1e-12);
     assert_eq!(t.tempo_changes.len(), 2);
     assert_eq!((t.tempo_changes[1].count, t.tempo_changes[1].bpm), (9, 160));
 }

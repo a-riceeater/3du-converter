@@ -154,11 +154,12 @@ pub fn sample_show() -> RawDrill {
     let sets = [(0u16, "1", "A", "", "StandardTab"), (8, "2", "", "1-2", "StandardTab"), (12, "2A", "", "", "SubTab"), (16, "3", "B", "3-4", "StandardTab")];
     let frame_count = 20usize;
 
-    // Tempo: 120 BPM for counts 0..=8, then 160 BPM.
+    // Tempo: 120 BPM for counts 0..=8, then 160 BPM. As in real files, the tempo stored at a
+    // count governs the interval that starts there.
     let tempos: Vec<u32> = (0..frame_count).map(|c| if c <= 8 { 120 } else { 160 }).collect();
     let mut count_times = vec![0.0f64];
     for c in 1..frame_count {
-        count_times.push(count_times[c - 1] + 60.0 / tempos[c] as f64);
+        count_times.push(count_times[c - 1] + 60.0 / tempos[c - 1] as f64);
     }
 
     let position = |p: usize, c: usize| -> (f32, f32) {

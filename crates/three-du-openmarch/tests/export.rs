@@ -29,10 +29,10 @@ fn om_structure_matches_the_universal_standard() {
     let starts: Vec<_> = show.pages.iter().map(|p| (p.name.as_str(), p.start_beat_index, p.is_subset)).collect();
     assert_eq!(starts, [("1", 0, None), ("2", 1, None), ("2A", 9, Some(true)), ("3", 13, None)]);
     assert!((show.pages[1].duration - 4.0).abs() < 1e-12, "8 counts at 120 BPM");
-    assert!((show.pages[2].duration - 1.5).abs() < 1e-12, "4 counts at 160 BPM");
+    assert!((show.pages[2].duration - 1.625).abs() < 1e-12, "one count at 120 BPM, three at 160");
     // Tempo: the mandatory 0-tempo first beat, 8 beats at 120, 8 at 160 (ends at the final set).
     let tempos: Vec<_> = show.tempo_sections.iter().map(|t| (t.tempo, t.number_of_beats)).collect();
-    assert_eq!(tempos, [(0.0, 1), (120.0, 8), (160.0, 8)]);
+    assert_eq!(tempos, [(0.0, 1), (120.0, 9), (160.0, 7)]);
     // T1 starts 10 yd left of center on the front hash: -16 steps, 28 steps from the front.
     let c = show.coordinates.iter().find(|c| c.marcher_id == "1" && c.page_id == "0").unwrap();
     assert_eq!((c.x_steps, c.y_steps), (-16.0, 28.0));
@@ -87,7 +87,7 @@ fn dots_database_is_valid_and_positions_survive() {
     assert_eq!(report.marchers, 4);
     assert_eq!(report.pages, 4);
     assert_eq!(report.beats, 17, "beat 0 plus counts 1..=16");
-    assert!((report.duration_seconds - (4.0 + 8.0 * 0.375)).abs() < 1e-9);
+    assert!((report.duration_seconds - (4.5 + 7.0 * 0.375)).abs() < 1e-9);
 
     let back = dots::read_coordinates(&path).unwrap();
     for (s, set) in p.sets.iter().enumerate() {
