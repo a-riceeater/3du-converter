@@ -7,7 +7,7 @@ the binary file directly and writes:
 |---|---|---|
 | OpenMarch project | `.dots` | Opens and edits in OpenMarch desktop 0.1.7 |
 | OpenMarch Universal Standard | `.om`, `.omz` | Valid under the official `@openmarch/schema` |
-| Fieldwork show | `.fieldwork` | Opens in Fieldwork's own reader and evaluator; GUI check pending |
+| Fieldwork show | `.fieldwork` | Opens in Fieldwork's own reader and evaluator |
 | MusicXML count track | `.musicxml` | Measures, meters, tempos, rehearsal marks and sets; imports in MuseScore 4 with exact timing |
 | Intermediate JSON | `.json` | The canonical model, for debugging and other tools |
 
