@@ -1,0 +1,15 @@
+[package]
+name = "three-du-fieldwork"
+description = "Fieldwork .fieldwork exporter for 3du-converter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+three-du-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+crc32fast.workspace = true
+rusqlite = { workspace = true, features = ["serialize"] }
