@@ -49,9 +49,9 @@ fn performers_and_ids() {
 #[test]
 fn coordinates_are_exact() {
     let p = project();
-    assert_eq!(p.position(0, 0), Some([-10.0, -8.75]));
-    assert_eq!(p.position(0, 4), Some([-10.0, -6.25]));
-    assert_eq!(p.position(1, 19), Some([0.0, -8.75]));
+    assert_eq!(p.position(0, 0), Some([-10.0, 8.75]));
+    assert_eq!(p.position(0, 4), Some([-10.0, 6.25]));
+    assert_eq!(p.position(1, 19), Some([0.0, 8.75]));
     // Canonical steps: 10 yards left of center = -16 steps; front hash = 28 steps from front.
     assert_eq!(p.steps(0, 0), Some((-16.0, 28.0)));
 }
@@ -90,7 +90,7 @@ fn sets_subsets_and_measures() {
 fn orientation_and_field() {
     let p = project();
     let t = p.coordinates.transform;
-    assert_eq!((t.x_sign, t.y_sign, t.front_y), (1.0, 1.0, -26.25));
+    assert_eq!((t.x_sign, t.y_sign, t.front_y), (1.0, -1.0, 26.25));
     assert_eq!(t.step_inches, 22.5);
     assert_eq!(t.field_depth_steps, 84.0);
     assert_eq!((p.field.extent_x_min, p.field.extent_x_max), (-60.0, 60.0));

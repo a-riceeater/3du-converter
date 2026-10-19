@@ -55,6 +55,8 @@ pub fn to_project(raw: &RawDrill, sha256: String, opts: &ConvertOptions) -> Dril
             symbol: non_empty(&p.symbol),
             kind: PerformerKind::Marcher,
             size: None,
+            shape_code: None,
+            rotation_radians: None,
             color_rgb: None,
         });
     }
@@ -86,9 +88,11 @@ pub fn to_project(raw: &RawDrill, sha256: String, opts: &ConvertOptions) -> Dril
             let p = &mut performers[i];
             if p.size.is_none() {
                 p.size = o.size.map(|s| [s.width, s.depth, s.height]);
+                p.shape_code = o.size.map(|s| s.shape);
             }
             if p.color_rgb.is_none() {
                 p.color_rgb = Some(o.rgb);
+                p.rotation_radians = Some(o.rotation);
             }
         }
     }
@@ -560,12 +564,13 @@ fn build_coordinates(src: SourceField, overrides: &TransformOverrides, diags: &m
         )),
     }
 
-    // Orientation: captions name the top/bottom of the source view, and the verified sample
-    // places tall scenery at +y. +y is therefore toward the back sideline unless the captions
-    // say otherwise.
+    // Orientation: the source uses screen-style axes, with y growing downward toward the
+    // BOTTOM caption. With the usual "TOP Back / BOTTOM Front" captions, +y therefore points
+    // toward the front sideline (confirmed by the owner of a real drill). Only captions that
+    // put the back at the bottom reverse this.
     let top = src.caption("TOP").unwrap_or("").to_ascii_lowercase();
     let bottom = src.caption("BOTTOM").unwrap_or("").to_ascii_lowercase();
-    let y_back = !(top.contains("front") || bottom.contains("back"));
+    let y_back = bottom.contains("back") || top.contains("front");
     notes.push(format!(
         "+y points toward the {} sideline (TOP caption {:?}, BOTTOM caption {:?})",
         if y_back { "back" } else { "front" },

@@ -137,6 +137,12 @@ pub struct Performer {
     pub kind: PerformerKind,
     /// Width, depth, height in source units, when the object has a physical size.
     pub size: Option<[f32; 3]>,
+    /// Source shape code stored with the size (0 and 2 observed; meaning not yet decoded).
+    #[serde(default)]
+    pub shape_code: Option<u16>,
+    /// Rotation at the first stored count, in radians as stored by the source.
+    #[serde(default)]
+    pub rotation_radians: Option<f32>,
     pub color_rgb: Option<[u16; 3]>,
 }
 

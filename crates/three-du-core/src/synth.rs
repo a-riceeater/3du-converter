@@ -164,27 +164,28 @@ pub fn sample_show() -> RawDrill {
     let position = |p: usize, c: usize| -> (f32, f32) {
         let c = c.min(16) as f32;
         match p {
-            // Straight line 8 counts forward 5 yards, hold, then 8 counts across 5 yards.
+            // Source y grows toward the front sideline (screen-style axes).
+            // Straight line 8 counts toward the back 5 yards, hold, then 8 counts across 5 yards.
             0 => {
                 if c <= 8.0 {
-                    (-10.0, -8.75 + 5.0 * c / 8.0)
+                    (-10.0, 8.75 - 5.0 * c / 8.0)
                 } else {
-                    (-10.0 + 5.0 * (c - 8.0) / 8.0, -3.75)
+                    (-10.0 + 5.0 * (c - 8.0) / 8.0, 3.75)
                 }
             }
             // Stays on the 50, front hash.
-            1 => (0.0, -8.75),
+            1 => (0.0, 8.75),
             // Quarter circle of radius 5 around (10, 0) for counts 8..16.
             2 => {
                 if c <= 8.0 {
                     (15.0, 0.0)
                 } else {
                     let a = (c - 8.0) / 8.0 * std::f32::consts::FRAC_PI_2;
-                    (10.0 + 5.0 * a.cos(), 5.0 * a.sin())
+                    (10.0 + 5.0 * a.cos(), -5.0 * a.sin())
                 }
             }
             // A prop behind the back sideline.
-            _ => (0.0, 28.75),
+            _ => (0.0, -28.75),
         }
     };
 
@@ -207,7 +208,7 @@ pub fn sample_show() -> RawDrill {
                 })
                 .collect();
             let annotations = match c {
-                0 => vec![RawAnnotation::Text { id: [7; 8], reserved: 0, rect: [-60.0, -26.25, -47.5, -18.75], extra: [0.0, 0.0, 1.0], text: "Opening".into() }],
+                0 => vec![RawAnnotation::Text { id: [7; 8], reserved: 0, rect: [-60.0, 18.75, -47.5, 26.25], extra: [0.0, 0.0, 1.0], text: "Opening".into() }],
                 16 => vec![RawAnnotation::Polyline { id: [8; 8], reserved: 0, style: vec![0; 43], points: vec![[0.0, 0.0], [5.0, 5.0]] }],
                 _ => vec![],
             };
