@@ -104,6 +104,7 @@ Curved moves between sets are flattened unless `--preserve-curves` is used. See
 - [Intermediate model](docs/INTERMEDIATE_FORMAT.md)
 - [OpenMarch mapping](docs/OPENMARCH.md)
 - [Fieldwork mapping](docs/FIELDWORKS.md)
+- [Fieldwork per-performer paths (brief for Fieldwork)](docs/FIELDWORK_PATHS.md)
 - [MusicXML export and audio alignment](docs/MUSICXML.md)
 - [Embedding in Fieldwork (C ABI, Swift, XCFramework)](docs/INTEGRATION.md)
 - [Limitations](docs/FORMAT_LIMITATIONS.md)
