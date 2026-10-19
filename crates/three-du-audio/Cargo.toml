@@ -1,0 +1,12 @@
+[package]
+name = "three-du-audio"
+description = "Audio reading and drill-to-audio alignment for 3du-converter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+three-du-core.workspace = true
+serde.workspace = true
+thiserror.workspace = true
