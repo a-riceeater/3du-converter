@@ -8,6 +8,7 @@ the binary file directly and writes:
 | OpenMarch project | `.dots` | Opens and edits in OpenMarch desktop 0.1.7 |
 | OpenMarch Universal Standard | `.om`, `.omz` | Valid under the official `@openmarch/schema` |
 | Fieldwork show | `.fieldwork` | Opens in Fieldwork's own reader and evaluator; GUI check pending |
+| MusicXML count track | `.musicxml` | Measures, meters, tempos, rehearsal marks and sets; imports in MuseScore 4 with exact timing |
 | Intermediate JSON | `.json` | The canonical model, for debugging and other tools |
 
 It runs as a command-line tool and as a native library (C ABI) for embedding in Fieldwork.
@@ -34,6 +35,8 @@ cargo build --release -p three-du-cli
 3du-converter convert show.3du --format fieldwork --output show.fieldwork
 3du-converter convert show.3du --format om  --output show.om
 3du-converter convert show.3du --format omz --output show.omz
+3du-converter convert show.3du --format musicxml --output show.musicxml --audio show.wav
+3du-converter align show.3du --audio show.wav --click-check check.wav   # where the drill sits in a recording
 3du-converter extract show.3du --output show.json
 3du-converter validate show.dots                     # also .fieldwork, .om, .omz, .3du
 ```
@@ -46,6 +49,7 @@ cargo build --release -p three-du-cli
 | `--preserve-curves` | Keep curved and follow-the-leader moves exact by adding derived subsets |
 | `--page-map FILE` | Supply set boundaries yourself |
 | `--flip-x`, `--flip-y`, `--steps-per-unit N` | Override the coordinate transform |
+| `--audio FILE`, `--audio-offset S`, `--follow-audio`, `--click-check FILE` | Align with a `.wav` recording (MusicXML, `align`) |
 | `--json` | Machine-readable result on stdout |
 | `--verbose` / `--quiet` | More or less output |
 
@@ -100,6 +104,7 @@ Curved moves between sets are flattened unless `--preserve-curves` is used. See
 - [Intermediate model](docs/INTERMEDIATE_FORMAT.md)
 - [OpenMarch mapping](docs/OPENMARCH.md)
 - [Fieldwork mapping](docs/FIELDWORKS.md)
+- [MusicXML export and audio alignment](docs/MUSICXML.md)
 - [Embedding in Fieldwork (C ABI, Swift, XCFramework)](docs/INTEGRATION.md)
 - [Limitations](docs/FORMAT_LIMITATIONS.md)
 - [Privacy and testing with real files](docs/PRIVACY.md)

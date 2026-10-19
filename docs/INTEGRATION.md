@@ -18,6 +18,8 @@ Fieldwork's **Import Drill** action should call `libthree_du`, the C ABI in
 | `tdu_error_code`, `tdu_error_message` | Inspect an error |
 | `tdu_project_free`, `tdu_string_free`, `tdu_error_free` | Release what the library returned |
 
+Export formats include `TDU_FORMAT_MUSICXML` (count track on the drill's clock).
+
 Flags: `TDU_FLAG_STRICT`, `TDU_FLAG_ALLOW_LOSSY`, `TDU_FLAG_OVERWRITE`, `TDU_FLAG_PRESERVE_CURVES`.
 
 Error codes are stable (`TDU_ERR_NOT_3DU`, `TDU_ERR_UNSUPPORTED_VERSION`, `TDU_ERR_CORRUPT`,

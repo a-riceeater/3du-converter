@@ -27,6 +27,11 @@
 - **Trailing counts**: counts stored after the final set (the sample stores twice as many as
   used) are not exported. Movement during them would be reported as lossy.
 - **Audio**: the file only names the audio. Nothing is embedded or invented.
+- **Audio sync**: the file has no offset between count 0 and its audio. Automatic alignment
+  is applied only when confident. Recordings dense with attacks, such as live band
+  recordings, often cannot be confirmed; verify with `--click-check`. Only `.wav` is read.
+- **MusicXML meters**: the counts in each measure become an `n/4` meter. Ranges that don't
+  divide evenly get estimated bar lines, which are marked in the score.
 
 ## Movement between sets
 
@@ -45,6 +50,7 @@ That is reported as `curves_flattened`, and `--strict` refuses it.
 | OpenMarch | Annotations; props are ordinary marchers; labels must be prefix+number (renumbered when not); measure numbers are sequential; field depth is the source's (84 steps) |
 | Fieldwork | Props (kept in an extension); line annotations; duplicate labels are suffixed |
 | Universal Standard | Annotations, props, page notes |
+| MusicXML | Positions (it holds timing only); audio is referenced, not embedded |
 
 ## Without a set table
 
