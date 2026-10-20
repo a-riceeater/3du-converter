@@ -1,4 +1,5 @@
-//! Exporter for Fieldwork `.fieldwork` documents (container format 1.0, database schema 4).
+//! Exporter for Fieldwork `.fieldwork` documents (container format 1.0, database schema 4,
+//! or schema 5 when curved or uneven moves are written as per-performer [`paths`]).
 //!
 //! The layout follows `fieldwork-file-schema.md` and the reader in Fieldwork's
 //! `packages/DrillDocument`. Units are meters from field center (+x audience right,
@@ -8,9 +9,11 @@ pub mod paths;
 pub mod props;
 pub mod zip;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
+use paths::{path_end, Point, Ratio, Segment};
+use rusqlite::types::Value;
 use rusqlite::{params, Connection, DatabaseName};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -19,6 +22,9 @@ use three_du_core::{AnnotationKind, Diagnostic, DrillProject, Performer, Perform
 
 pub const FORMAT: &str = "org.fieldwork.show";
 pub const SCHEMA_VERSION: i32 = 4;
+/// Schema written when at least one performer follows a path.
+pub const PATHS_SCHEMA_VERSION: i32 = 5;
+pub const PATHS_CAPABILITY: &str = "drill.paths.v1";
 pub const WRITER: &str = concat!("3du-converter ", env!("CARGO_PKG_VERSION"));
 pub const EXTENSION_NAMESPACE: &str = "org.3du-converter.provenance";
 const SYMBOLS: [&str; 6] = ["circle", "cross", "square", "triangle", "diamond", "slash"];
@@ -67,6 +73,15 @@ ALTER TABLE performer ADD COLUMN symbol TEXT;
 CREATE TABLE field_note (id TEXT PRIMARY KEY, set_id TEXT NOT NULL REFERENCES arrival_set(id), ordinal INTEGER NOT NULL,
     x REAL NOT NULL, y REAL NOT NULL, text TEXT NOT NULL);
 PRAGMA user_version = 4;
+";
+
+/// Schema 5 adds per-performer paths (`docs/FIELDWORK_SCHEMA5.md` §2).
+const PATHS_SCHEMA: &str = "
+CREATE TABLE path_segment (transition_id TEXT NOT NULL REFERENCES transition(id), performer_id TEXT NOT NULL REFERENCES performer(id),
+    ordinal INTEGER NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('hold','line','arc')),
+    counts_num INTEGER NOT NULL, counts_den INTEGER NOT NULL, x1 REAL, y1 REAL, sweep REAL,
+    PRIMARY KEY (transition_id, performer_id, ordinal));
+PRAGMA user_version = 5;
 ";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -121,13 +136,27 @@ pub fn plan(p: &DrillProject) -> Vec<Diagnostic> {
     if renamed > 0 {
         d.push(Diagnostic::new(Severity::Warning, "labels_made_unique", format!("{renamed} duplicate performer label(s) were suffixed to make them unique")));
     }
-    let nonlinear = p.sets.iter().filter(|s| !s.straight_transition).count();
-    if nonlinear > 0 {
-        d.push(Diagnostic::new(
-            Severity::Warning,
-            "curves_flattened",
-            format!("{nonlinear} move(s) contain curved or uneven paths; Fieldwork version 1 transitions are straight"),
-        ));
+    // A fitting failure is reported by `build_database`.
+    if let Ok(fit) = fit_paths(p) {
+        if !fit.paths.is_empty() {
+            let moves = fit.paths.iter().map(|m| m.set).collect::<BTreeSet<_>>().len();
+            let rows: usize = fit.paths.iter().map(|m| m.segments.len()).sum();
+            d.push(Diagnostic::new(
+                Severity::Info,
+                "curves_as_paths",
+                format!(
+                    "{} performer move(s) in {moves} move(s) follow curved or uneven routes; they are written as {rows} path segment(s) (schema 5, {PATHS_CAPABILITY}) that match every count within 1 mm",
+                    fit.paths.len()
+                ),
+            ));
+        }
+        if fit.missing > 0 {
+            d.push(Diagnostic::new(
+                Severity::Warning,
+                "curves_flattened",
+                format!("{} performer move(s) inside curved moves have counts without a stored position; they are written as straight moves", fit.missing),
+            ));
+        }
     }
     let lines = p.annotations.iter().filter(|a| matches!(a.kind, AnnotationKind::Polyline { .. })).count();
     if lines > 0 {
@@ -193,6 +222,52 @@ fn label_prefix(label: &str) -> String {
     }
 }
 
+/// One performer's path through the move into a set.
+struct MovePath {
+    set: usize,
+    /// Ordinal in the roster (see [`marchers`]).
+    performer: usize,
+    segments: Vec<paths::Segment>,
+}
+
+struct FittedPaths {
+    /// Moves that are not straight at even steps, in arrival-set then roster order.
+    paths: Vec<MovePath>,
+    /// Performer moves inside non-straight moves that cannot be fitted because a count has
+    /// no stored position.
+    missing: usize,
+}
+
+/// Fits a path to every performer's move from the per-count positions (schema 5 §4).
+/// Performers placed at both ends who move straight at even steps get no path.
+fn fit_paths(p: &DrillProject) -> Result<FittedPaths, ExportError> {
+    let roster = marchers(p);
+    let mut fit = FittedPaths { paths: Vec::new(), missing: 0 };
+    for w in p.sets.windows(2) {
+        let (a, b) = (w[0].start_count as usize, w[1].start_count as usize);
+        for (ordinal, q) in roster.iter().enumerate() {
+            let (Some(_), Some(_)) = (p.meters(q.index, a), p.meters(q.index, b)) else { continue };
+            let Some(samples) = (a..=b).map(|c| p.meters(q.index, c)).collect::<Option<Vec<_>>>() else {
+                fit.missing += !w[1].straight_transition as usize;
+                continue;
+            };
+            match paths::path_for_move(&samples) {
+                Ok(Some(segments)) => fit.paths.push(MovePath { set: w[1].index, performer: ordinal, segments }),
+                Ok(None) => {}
+                Err(worst) => {
+                    return Err(ExportError::Validation(format!(
+                        "no path reproduces roster performer #{} in the move into set #{} within 1 mm (worst count off by {:.3} mm)",
+                        ordinal + 1,
+                        w[1].index,
+                        worst * 1000.0
+                    )))
+                }
+            }
+        }
+    }
+    Ok(fit)
+}
+
 /// The cursor (event ordinal, fraction) of the instant count `c` is reached.
 /// Event `k` spans counts k → k+1; a boundary is written as the next event at fraction 0.
 fn cursor(c: u32, events: u32) -> (u32, i64, i64) {
@@ -204,6 +279,11 @@ fn cursor(c: u32, events: u32) -> (u32, i64, i64) {
 }
 
 pub fn build_database(p: &DrillProject) -> Result<Vec<u8>, ExportError> {
+    database(p).map(|(bytes, _)| bytes)
+}
+
+/// The serialized database, and whether it holds paths (schema 5).
+fn database(p: &DrillProject) -> Result<(Vec<u8>, bool), ExportError> {
     if p.sets.is_empty() {
         return Err(ExportError::Unsupported("the drill has no sets; Fieldwork arrival sets cannot be built".into()));
     }
@@ -220,6 +300,10 @@ pub fn build_database(p: &DrillProject) -> Result<Vec<u8>, ExportError> {
     let mut conn = Connection::open_in_memory().map_err(db_err)?;
     conn.execute_batch("PRAGMA foreign_keys = ON;").map_err(db_err)?;
     conn.execute_batch(SCHEMA).map_err(db_err)?;
+    let fit = fit_paths(p)?;
+    if !fit.paths.is_empty() {
+        conn.execute_batch(PATHS_SCHEMA).map_err(db_err)?;
+    }
     let tx = conn.transaction().map_err(db_err)?;
 
     tx.execute("INSERT INTO meta (key, value) VALUES ('writer', ?1), ('units', 'meters')", params![WRITER]).map_err(db_err)?;
@@ -409,6 +493,20 @@ pub fn build_database(p: &DrillProject) -> Result<Vec<u8>, ExportError> {
         }
     }
 
+    // Paths, by arrival set, then roster order, then segment order. Each ends on the
+    // placement's exact doubles, which `fit_paths` sampled with the same `p.meters`.
+    if !fit.paths.is_empty() {
+        let mut st = tx.prepare("INSERT INTO path_segment (transition_id, performer_id, ordinal, kind, counts_num, counts_den, x1, y1, sweep) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)").map_err(db_err)?;
+        for m in &fit.paths {
+            let (transition, performer) = (uid("transition", &m.set.to_string()), uid("performer", &roster[m.performer].source_id));
+            for (ordinal, seg) in m.segments.iter().enumerate() {
+                let (x1, y1) = seg.end().unzip();
+                let counts = seg.counts();
+                st.execute(params![transition, performer, ordinal as i64, seg.kind(), counts.num, counts.den, x1, y1, seg.sweep()]).map_err(db_err)?;
+            }
+        }
+    }
+
     // Text annotations become field notes on their set (or the next set).
     {
         let mut st = tx.prepare("INSERT INTO field_note (id, set_id, ordinal, x, y, text) VALUES (?1, ?2, ?3, ?4, ?5, ?6)").map_err(db_err)?;
@@ -435,7 +533,7 @@ pub fn build_database(p: &DrillProject) -> Result<Vec<u8>, ExportError> {
         return Err(ExportError::Validation(format!("{fk} foreign key violation(s)")));
     }
     let bytes = conn.serialize(DatabaseName::Main).map_err(db_err)?;
-    Ok(bytes.to_vec())
+    Ok((bytes.to_vec(), !fit.paths.is_empty()))
 }
 
 fn provenance_json(p: &DrillProject, diags: &[Diagnostic]) -> Vec<u8> {
@@ -457,7 +555,7 @@ fn provenance_json(p: &DrillProject, diags: &[Diagnostic]) -> Vec<u8> {
 
 /// Builds the complete `.fieldwork` archive in memory.
 pub fn build_archive(p: &DrillProject, diags: &[Diagnostic]) -> Result<Vec<u8>, ExportError> {
-    let db = build_database(p)?;
+    let (db, has_paths) = database(p)?;
     let ext_path = format!("extensions/{EXTENSION_NAMESPACE}/provenance.json");
     let ext = provenance_json(p, diags);
     // Extension members are written sorted by path, after the database.
@@ -468,14 +566,20 @@ pub fn build_archive(p: &DrillProject, diags: &[Diagnostic]) -> Result<Vec<u8>, 
     extensions.sort_by(|a, b| a.1.cmp(&b.1));
     let mut members = vec![Member { bytes: db.len() as u64, path: "show.sqlite".into(), sha256: sha_hex(&db) }];
     members.extend(extensions.iter().map(|(_, path, bytes)| Member { bytes: bytes.len() as u64, path: path.clone(), sha256: sha_hex(bytes) }));
+    let mut capabilities = vec!["drill.core.v1".to_string(), "timing.anchors.v1".into()];
+    let mut required_capabilities = vec!["drill.core.v1".to_string()];
+    if has_paths {
+        capabilities.push(PATHS_CAPABILITY.into());
+        required_capabilities.push(PATHS_CAPABILITY.into());
+    }
     let manifest = Manifest {
-        capabilities: vec!["drill.core.v1".into(), "timing.anchors.v1".into()],
+        capabilities,
         extensions: extensions.iter().map(|(ns, _, _)| ExtensionEntry { namespace: ns.to_string(), required: false }).collect(),
         format: FORMAT.into(),
         format_version: Version { major: 1, minor: 0 },
         members,
         min_reader_version: Version { major: 1, minor: 0 },
-        required_capabilities: vec!["drill.core.v1".into()],
+        required_capabilities,
         show_id: stable_uuid("fieldwork/show", &format!("{}/", p.metadata.source.sha256)),
         writer: WRITER.into(),
     };
@@ -513,6 +617,9 @@ pub struct FieldworkReport {
     pub events: i64,
     pub placements: i64,
     pub field_notes: i64,
+    /// Performer moves that follow a path, and their segment rows (schema 5).
+    pub paths: i64,
+    pub path_segments: i64,
     pub duration_seconds: f64,
     pub members: usize,
 }
@@ -546,8 +653,8 @@ pub fn validate_bytes(bytes: &[u8]) -> Result<FieldworkReport, ExportError> {
     let conn = open_serialized(db)?;
     let one = |sql: &str| -> Result<i64, ExportError> { conn.query_row(sql, [], |r| r.get(0)).map_err(db_err) };
     let schema_version = one("PRAGMA user_version")?;
-    if schema_version != SCHEMA_VERSION as i64 {
-        return Err(v(format!("schema {schema_version}, expected {SCHEMA_VERSION}")));
+    if schema_version != SCHEMA_VERSION as i64 && schema_version != PATHS_SCHEMA_VERSION as i64 {
+        return Err(v(format!("schema {schema_version}, expected {SCHEMA_VERSION} or {PATHS_SCHEMA_VERSION}")));
     }
     if one("SELECT count(*) FROM pragma_foreign_key_check")? != 0 {
         return Err(v("foreign key violations".into()));
@@ -596,6 +703,11 @@ pub fn validate_bytes(bytes: &[u8]) -> Result<FieldworkReport, ExportError> {
     if one("SELECT count(*) FROM field_note WHERE length(text) > 2000")? != 0 {
         return Err(v("field note longer than 2000 characters".into()));
     }
+    let (paths, path_segments) = if schema_version >= PATHS_SCHEMA_VERSION as i64 { check_paths(&conn)? } else { (0, 0) };
+    let declared = |list: &[String]| list.iter().any(|c| c == PATHS_CAPABILITY);
+    if path_segments > 0 && !(declared(&manifest.capabilities) && declared(&manifest.required_capabilities)) {
+        return Err(v(format!("paths exist but {PATHS_CAPABILITY} is not a required capability")));
+    }
     let duration_seconds: f64 = conn.query_row("SELECT total(baseline_seconds) FROM timing_event", [], |r| r.get(0)).map_err(db_err)?;
     Ok(FieldworkReport {
         format_version: format!("{}.{}", manifest.format_version.major, manifest.format_version.minor),
@@ -605,9 +717,145 @@ pub fn validate_bytes(bytes: &[u8]) -> Result<FieldworkReport, ExportError> {
         events: one("SELECT count(*) FROM timing_event")?,
         placements: one("SELECT count(*) FROM placement")?,
         field_notes: one("SELECT count(*) FROM field_note")?,
+        paths,
+        path_segments,
         duration_seconds,
         members: members.len(),
     })
+}
+
+/// Rows of a query as dynamically typed values.
+fn query_values(conn: &Connection, sql: &str) -> Result<Vec<Vec<Value>>, ExportError> {
+    let mut st = conn.prepare(sql).map_err(db_err)?;
+    let n = st.column_count();
+    let rows = st.query_map([], |r| (0..n).map(|i| r.get(i)).collect()).map_err(db_err)?;
+    rows.collect::<Result<_, _>>().map_err(db_err)
+}
+
+fn text(x: &Value) -> String {
+    if let Value::Text(t) = x {
+        t.clone()
+    } else {
+        String::new()
+    }
+}
+
+/// An INTEGER column; REAL and other types are `None`, as Fieldwork requires.
+fn integer(x: &Value) -> Option<i64> {
+    if let Value::Integer(i) = x {
+        Some(*i)
+    } else {
+        None
+    }
+}
+
+fn finite(x: &Value) -> Option<f64> {
+    match x {
+        Value::Real(f) if f.is_finite() => Some(*f),
+        Value::Integer(i) => Some(*i as f64),
+        _ => None,
+    }
+}
+
+/// Each set's position in count pulses, keyed by set id. `None` for timelines with
+/// groupings or pickups, whose counts fall unevenly; this converter never writes them.
+fn set_pulses(conn: &Connection) -> Result<Option<HashMap<String, Ratio>>, ExportError> {
+    let mut unit: HashMap<String, Ratio> = HashMap::new();
+    for r in query_values(conn, "SELECT id, pulse_unit_num, pulse_unit_den, grouping, pickup_num FROM measure")? {
+        match (integer(&r[1]), integer(&r[2])) {
+            (Some(n), Some(d)) if n > 0 && d > 0 && r[3] == Value::Null && r[4] == Value::Null => unit.insert(text(&r[0]), Ratio::new(n, d)),
+            _ => return Ok(None),
+        };
+    }
+    let mut events: HashMap<String, (Ratio, Ratio)> = HashMap::new();
+    let mut next: HashMap<String, Ratio> = HashMap::new();
+    for r in query_values(conn, "SELECT id, movement_id, kind, measure_id, notated_num, notated_den FROM timing_event ORDER BY movement_id, ordinal")? {
+        let at = next.get(&text(&r[1])).copied().unwrap_or(Ratio::ZERO);
+        let length = match (text(&r[2]).as_str(), unit.get(&text(&r[3])), integer(&r[4]), integer(&r[5])) {
+            ("hold", ..) => Ratio::ZERO,
+            (_, Some(u), Some(n), Some(d)) if d > 0 => Ratio::new(n * u.den, d * u.num),
+            _ => return Ok(None),
+        };
+        events.insert(text(&r[0]), (at, length));
+        next.insert(text(&r[1]), at + length);
+    }
+    let mut out = HashMap::new();
+    for r in query_values(conn, "SELECT id, event_id, fraction_num, fraction_den FROM arrival_set")? {
+        let (Some(&(at, length)), Some(n), Some(d)) = (events.get(&text(&r[1])), integer(&r[2]), integer(&r[3])) else { return Ok(None) };
+        out.insert(text(&r[0]), at + Ratio::new(length.num * n, length.den * d));
+    }
+    Ok(Some(out))
+}
+
+/// Checks every path the way Fieldwork's reader does (schema 5 §7). Returns the number of
+/// paths and of segment rows.
+fn check_paths(conn: &Connection) -> Result<(i64, i64), ExportError> {
+    let pulses = set_pulses(conn)?;
+    // Each transition's move starts at the previous set in the same movement.
+    let mut from: HashMap<String, String> = HashMap::new();
+    let mut previous: HashMap<String, String> = HashMap::new();
+    for r in query_values(conn, "SELECT id, movement_id FROM arrival_set ORDER BY movement_id, ordinal")? {
+        if let Some(a) = previous.insert(text(&r[1]), text(&r[0])) {
+            from.insert(text(&r[0]), a);
+        }
+    }
+    let to_set: HashMap<String, String> = query_values(conn, "SELECT id, to_set_id FROM transition")?.iter().map(|r| (text(&r[0]), text(&r[1]))).collect();
+    let placed: HashMap<(String, String), Point> = query_values(conn, "SELECT set_id, performer_id, x, y FROM placement WHERE state = 'placed'")?
+        .iter()
+        .filter_map(|r| Some(((text(&r[0]), text(&r[1])), (finite(&r[2])?, finite(&r[3])?))))
+        .collect();
+
+    let rows = query_values(conn, "SELECT transition_id, performer_id, ordinal, kind, counts_num, counts_den, x1, y1, sweep FROM path_segment ORDER BY transition_id, performer_id, ordinal")?;
+    let mut groups: BTreeMap<(String, String), Vec<&Vec<Value>>> = BTreeMap::new();
+    for r in &rows {
+        groups.entry((text(&r[0]), text(&r[1]))).or_default().push(r);
+    }
+    for ((transition, performer), group) in &groups {
+        let damaged = |why: &str| ExportError::Validation(format!("path in transition {transition}: {why}"));
+        let b = to_set.get(transition).ok_or_else(|| damaged("no such transition"))?;
+        let a = from.get(b).ok_or_else(|| damaged("the move has no previous set"))?;
+        let (Some(&start), Some(&end)) = (placed.get(&(a.clone(), performer.clone())), placed.get(&(b.clone(), performer.clone()))) else {
+            return Err(damaged("the performer is not placed at both ends"));
+        };
+        let mut segments = Vec::with_capacity(group.len());
+        let mut point = start;
+        for (k, r) in group.iter().enumerate() {
+            if integer(&r[2]) != Some(k as i64) {
+                return Err(damaged("ordinals are not 0…n−1"));
+            }
+            let counts = match (integer(&r[4]), integer(&r[5])) {
+                (Some(n), Some(d)) if n > 0 && d > 0 => Ratio::new(n, d),
+                _ => return Err(damaged("counts are not positive integers")),
+            };
+            let to = match (&r[6], &r[7]) {
+                (Value::Null, Value::Null) => None,
+                (x, y) => Some(finite(x).zip(finite(y)).ok_or_else(|| damaged("a point is not finite"))?),
+            };
+            let sweep = match &r[8] {
+                Value::Null => None,
+                w => Some(finite(w).filter(|w| *w != 0.0 && w.abs() < 360.0).ok_or_else(|| damaged("a sweep is out of range"))?),
+            };
+            let segment = match (text(&r[3]).as_str(), to, sweep) {
+                ("hold", None, None) => Segment::Hold { counts },
+                ("line", Some(to), None) => Segment::Line { counts, to },
+                ("arc", Some(to), Some(sweep)) if (to.0 - point.0).hypot(to.1 - point.1) > 1e-6 => Segment::Arc { counts, to, sweep },
+                _ => return Err(damaged("a segment's kind does not match its point and sweep, or an arc's chord is too short")),
+            };
+            point = segment.end().unwrap_or(point);
+            segments.push(segment);
+        }
+        if let Some(pulses) = &pulses {
+            let total = segments.iter().fold(Ratio::ZERO, |t, s| t + s.counts());
+            if pulses.get(b).zip(pulses.get(a)).map(|(b, a)| *b - *a) != Some(total) {
+                return Err(damaged("durations do not add up to the move's length"));
+            }
+        }
+        let last = path_end(start, &segments);
+        if (last.0 - end.0).hypot(last.1 - end.1) > 1e-6 {
+            return Err(damaged("the path does not end at the arrival placement"));
+        }
+    }
+    Ok((groups.len() as i64, rows.len() as i64))
 }
 
 /// Writes a `.fieldwork` file atomically after validating the encoded archive.

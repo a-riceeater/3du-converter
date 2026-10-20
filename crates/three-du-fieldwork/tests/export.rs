@@ -1,6 +1,8 @@
 use three_du_core::export::LossPolicy;
 use three_du_core::synth::{encode, sample_show};
 use three_du_core::{read_bytes, DrillProject, ReadOptions};
+use sha2::{Digest, Sha256};
+use three_du_fieldwork::paths::{path_point, Ratio, Segment};
 use three_du_fieldwork::{build_archive, export_fieldwork, plan, validate_bytes, zip};
 
 fn project() -> DrillProject {
@@ -32,7 +34,7 @@ fn archive_layout_and_manifest() {
     assert_eq!(manifest["extensions"][0]["namespace"], "org.3du-converter.props");
     assert_eq!(manifest["extensions"][1]["required"], false);
     let report = validate_bytes(&bytes).unwrap();
-    assert_eq!(report.schema_version, 4);
+    assert_eq!(report.schema_version, 5, "the curved move is written as paths");
     assert_eq!(report.performers, 3, "the prop is not a performer");
     assert_eq!(report.sets, 4);
     assert_eq!(report.events, 16);
@@ -126,7 +128,8 @@ fn writes_atomically_and_refuses_overwrite() {
     let _ = std::fs::remove_file(&path);
     export_fieldwork(&p, &path, LossPolicy::Default, false).unwrap();
     assert!(export_fieldwork(&p, &path, LossPolicy::Default, false).is_err());
-    assert_eq!(export_fieldwork(&p, &path, LossPolicy::Strict, true).unwrap_err().code(), "refused_lossy");
+    // Curves are kept exact as paths, so even the strict policy accepts the synthetic show.
+    export_fieldwork(&p, &path, LossPolicy::Strict, true).unwrap();
     validate_bytes(&std::fs::read(&path).unwrap()).unwrap();
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -140,4 +143,127 @@ fn validator_accepts_a_real_fieldwork_file() {
     };
     let report = validate_bytes(&std::fs::read(path).unwrap()).unwrap();
     assert_eq!(report.schema_version, 4);
+}
+
+/// Path rows of one performer in the move into the set with `ordinal`.
+fn path_rows(db: &rusqlite::Connection, ordinal: i64, label: &str) -> Vec<Segment> {
+    db.prepare(
+        "SELECT ps.kind, ps.counts_num, ps.counts_den, ps.x1, ps.y1, ps.sweep FROM path_segment ps
+           JOIN transition t ON t.id = ps.transition_id JOIN arrival_set s ON s.id = t.to_set_id
+           JOIN performer pe ON pe.id = ps.performer_id WHERE s.ordinal = ?1 AND pe.label = ?2 ORDER BY ps.ordinal",
+    )
+    .unwrap()
+    .query_map(rusqlite::params![ordinal, label], |r| {
+        let counts = Ratio::new(r.get(1)?, r.get(2)?);
+        let to = || -> rusqlite::Result<(f64, f64)> { Ok((r.get(3)?, r.get(4)?)) };
+        Ok(match r.get::<_, String>(0)?.as_str() {
+            "hold" => Segment::Hold { counts },
+            "line" => Segment::Line { counts, to: to()? },
+            _ => Segment::Arc { counts, to: to()?, sweep: r.get(5)? },
+        })
+    })
+    .unwrap()
+    .map(Result::unwrap)
+    .collect()
+}
+
+#[test]
+fn curved_moves_become_paths_without_subsets() {
+    let p = project();
+    let diags = plan(&p);
+    assert!(diags.iter().any(|d| d.code == "curves_as_paths"));
+    assert!(!diags.iter().any(|d| d.code == "curves_flattened" || d.code == "curve_subsets_added"));
+    let bytes = build_archive(&p, &diags).unwrap();
+    let members = zip::read(&bytes).unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&members[0].1).unwrap();
+    assert_eq!(manifest["capabilities"], serde_json::json!(["drill.core.v1", "timing.anchors.v1", "drill.paths.v1"]));
+    assert_eq!(manifest["requiredCapabilities"], serde_json::json!(["drill.core.v1", "drill.paths.v1"]));
+    let report = validate_bytes(&bytes).unwrap();
+    assert_eq!((report.sets, report.paths, report.path_segments), (4, 2, 2));
+
+    let db = open_db(&bytes);
+    let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+    assert_eq!(version, 5);
+    let types: (String, String) = db.query_row("SELECT DISTINCT typeof(counts_num), typeof(counts_den) FROM path_segment", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    assert_eq!(types, ("integer".into(), "integer".into()));
+    // Only S1's quarter circle needs rows: two 45° arcs of 4 counts, into 2A and into 3. T1's
+    // legs are straight at even steps and T2 stands still.
+    let straight: i64 = db.query_row("SELECT count(*) FROM path_segment ps JOIN performer pe ON pe.id = ps.performer_id WHERE pe.label != 'S1'", [], |r| r.get(0)).unwrap();
+    assert_eq!(straight, 0);
+    let s1 = p.performers.iter().find(|q| q.label == "S1").unwrap().index;
+    for (ordinal, from) in [(2, 8), (3, 12)] {
+        let segments = path_rows(&db, ordinal, "S1");
+        assert_eq!(segments.len(), 1);
+        let Segment::Arc { counts, to, sweep } = segments[0] else { panic!("{segments:?}") };
+        assert_eq!(counts, Ratio::int(4));
+        assert!((sweep.abs() - 45.0).abs() < 1e-3, "{sweep}");
+        assert_eq!(Some(to), p.meters(s1, from + 4), "ends on the placement's exact doubles");
+        let start = p.meters(s1, from).unwrap();
+        for u in 0..=4 {
+            let (x, y) = path_point(start, &segments, u as f64);
+            let (sx, sy) = p.meters(s1, from + u).unwrap();
+            assert!((x - sx).hypot(y - sy) < 1e-4, "count {} off", from + u);
+        }
+    }
+}
+
+#[test]
+fn straight_drills_stay_schema_4() {
+    let mut p = project();
+    // Walk S1 straight from count 8 to 16 instead of along the quarter circle.
+    let track = &mut p.positions[2].xy;
+    let (a, b) = (track[8].unwrap(), track[16].unwrap());
+    for c in 9..16 {
+        let t = (c - 8) as f32 / 8.0;
+        track[c] = Some([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+    }
+    let diags = plan(&p);
+    assert!(!diags.iter().any(|d| d.code == "curves_as_paths"));
+    let bytes = build_archive(&p, &diags).unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&zip::read(&bytes).unwrap()[0].1).unwrap();
+    assert_eq!(manifest["requiredCapabilities"], serde_json::json!(["drill.core.v1"]));
+    assert_eq!(validate_bytes(&bytes).unwrap().schema_version, 4);
+    let tables: i64 = open_db(&bytes).query_row("SELECT count(*) FROM sqlite_master WHERE name = 'path_segment'", [], |r| r.get(0)).unwrap();
+    assert_eq!(tables, 0);
+}
+
+/// The archive with `sql` applied to its database and the manifest hashes recomputed.
+fn tamper_db(archive: &[u8], sql: &str, tag: &str) -> Vec<u8> {
+    let mut members = zip::read(archive).unwrap();
+    let path = std::env::temp_dir().join(format!("three-du-fw-tamper-{}-{tag}.sqlite", std::process::id()));
+    std::fs::write(&path, &members[1].1).unwrap();
+    rusqlite::Connection::open(&path).unwrap().execute_batch(sql).unwrap();
+    members[1].1 = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    let mut manifest: serde_json::Value = serde_json::from_slice(&members[0].1).unwrap();
+    let db = &members[1].1;
+    manifest["members"][0]["bytes"] = db.len().into();
+    manifest["members"][0]["sha256"] = Sha256::digest(db).iter().map(|x| format!("{x:02x}")).collect::<String>().into();
+    members[0].1 = serde_json::to_vec_pretty(&manifest).unwrap();
+    zip::write(&members).unwrap()
+}
+
+#[test]
+fn damaged_paths_are_rejected() {
+    let p = project();
+    let bytes = build_archive(&p, &plan(&p)).unwrap();
+    for (tag, sql, why) in [
+        ("sweep", "UPDATE path_segment SET sweep = 400", "sweep"),
+        // INTEGER affinity would store 4.0 as 4, so a non-integral REAL stands in for it.
+        ("real", "UPDATE path_segment SET counts_num = 4.5", "positive integers"),
+        ("counts", "UPDATE path_segment SET counts_num = 3", "add up"),
+        ("end", "UPDATE path_segment SET x1 = x1 + 0.01", "does not end"),
+        ("ordinal", "UPDATE path_segment SET ordinal = 1", "ordinals"),
+        ("kind", "UPDATE path_segment SET sweep = NULL", "kind"),
+        ("unplaced", "UPDATE placement SET state = 'unresolved', x = NULL, y = NULL WHERE set_id IN (SELECT to_set_id FROM transition WHERE id IN (SELECT transition_id FROM path_segment)) AND performer_id IN (SELECT performer_id FROM path_segment)", "placed"),
+    ] {
+        let err = validate_bytes(&tamper_db(&bytes, sql, tag)).unwrap_err().to_string();
+        assert!(err.contains(why), "{tag}: {err}");
+    }
+    // Paths without the capability in the manifest.
+    let mut members = zip::read(&bytes).unwrap();
+    let mut manifest: serde_json::Value = serde_json::from_slice(&members[0].1).unwrap();
+    manifest["requiredCapabilities"] = serde_json::json!(["drill.core.v1"]);
+    members[0].1 = serde_json::to_vec_pretty(&manifest).unwrap();
+    assert!(validate_bytes(&zip::write(&members).unwrap()).unwrap_err().to_string().contains("drill.paths.v1"));
 }
