@@ -35,13 +35,17 @@
 
 ## Movement between sets
 
-Both targets interpolate straight, even-step lines between sets. The source stores positions
-at every count, so curved, follow-the-leader and stop-and-go moves are flattened by default.
-That is reported as `curves_flattened`, and `--strict` refuses it.
+The source stores positions at every count. Fieldwork output keeps curved, follow-the-leader
+and stop-and-go moves as per-performer paths (schema 5, `drill.paths.v1`): every count is
+reproduced within 1 mm without adding sets (see [FIELDWORKS.md](FIELDWORKS.md)). Fieldwork
+builds without path support open such files read-only.
+
+OpenMarch interpolates straight, even-step lines between pages, so these moves are flattened
+by default. That is reported as `curves_flattened`, and `--strict` refuses it.
 - In the sample, 27 of 44 moves are non-straight. Mid-move deviation reaches several meters.
 - `--preserve-curves` inserts derived subsets at each count where a performer changes
   direction or speed. The result reproduces every stored count, but adds subsets the designer
-  did not write; they are labeled `<set>~n`.
+  did not write; they are labeled `<set>~n`. Fieldwork output does not need it and ignores it.
 
 ## Targets
 

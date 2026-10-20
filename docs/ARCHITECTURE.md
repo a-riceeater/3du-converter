@@ -21,7 +21,7 @@
 |---|---|---|
 | `three-du-core` | Format detection, decoder, canonical model, coordinate transform, loss policy, atomic writes, synthetic fixture encoder | serde, sha2, thiserror |
 | `three-du-openmarch` | `.om`/`.omz` builder and validator; `.dots` writer and validator | core, rusqlite (bundled SQLite), flate2 |
-| `three-du-fieldwork` | `.fieldwork` archive: ZIP subset, manifest, schema-4 database, provenance and props extensions, validator | core, rusqlite, crc32fast, sha2 |
+| `three-du-fieldwork` | `.fieldwork` archive: ZIP subset, manifest, schema-4 database (schema 5 with fitted per-performer paths), provenance and props extensions, validator | core, rusqlite, crc32fast, sha2 |
 | `three-du-cli` | The `3du-converter` command | all of the above, clap |
 | `three-du-ffi` | C ABI (`cdylib` + `staticlib`) and `include/three_du.h` | all of the above |
 

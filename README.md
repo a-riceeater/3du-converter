@@ -46,7 +46,7 @@ cargo build --release -p three-du-cli
 | `--overwrite` | Replace an existing output (otherwise refused) |
 | `--strict` | Refuse any conversion that is not exact |
 | `--allow-lossy` | Accept approximations (for example, sets inferred from motion) |
-| `--preserve-curves` | Keep curved and follow-the-leader moves exact by adding derived subsets |
+| `--preserve-curves` | Keep curved and follow-the-leader moves exact by adding derived subsets (OpenMarch; Fieldwork keeps them as paths without it) |
 | `--page-map FILE` | Supply set boundaries yourself |
 | `--flip-x`, `--flip-y`, `--steps-per-unit N` | Override the coordinate transform |
 | `--audio FILE`, `--audio-offset S`, `--follow-audio`, `--click-check FILE` | Align with a `.wav` recording (MusicXML, `align`) |
@@ -94,7 +94,9 @@ cargo run -p three-du-core --example make_synthetic -- synthetic.3du
 - **Field**: the source's yard lines, hashes and step size.
 - **Notes**: text notes (Fieldwork only).
 
-Curved moves between sets are flattened unless `--preserve-curves` is used. See
+Fieldwork output keeps curved, staggered and stop-and-go moves exact as per-performer paths
+(holds, lines and arcs, within 1 mm at every count), with only the designer's sets. OpenMarch
+output flattens them unless `--preserve-curves` is used. See
 [docs/FORMAT_LIMITATIONS.md](docs/FORMAT_LIMITATIONS.md).
 
 ## Documentation
@@ -105,6 +107,7 @@ Curved moves between sets are flattened unless `--preserve-curves` is used. See
 - [OpenMarch mapping](docs/OPENMARCH.md)
 - [Fieldwork mapping](docs/FIELDWORKS.md)
 - [Fieldwork per-performer paths (brief for Fieldwork)](docs/FIELDWORK_PATHS.md)
+- [Fieldwork schema 5 paths (what the converter writes)](docs/FIELDWORK_SCHEMA5.md)
 - [MusicXML export and audio alignment](docs/MUSICXML.md)
 - [Embedding in Fieldwork (C ABI, Swift, XCFramework)](docs/INTEGRATION.md)
 - [Limitations](docs/FORMAT_LIMITATIONS.md)

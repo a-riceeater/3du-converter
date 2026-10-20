@@ -105,7 +105,7 @@ and links the DLL has been run on Windows with clang.
 1. `tdu_detect_format` on the file the user picked. If it isn't `TDU_FORMAT_3DU`, explain which
    format it is.
 2. `tdu_open_path` on a background task, with progress.
-3. Show `tdu_project_summary_json`: performers, sets, warnings. Offer "keep curves exact"
-   (`TDU_FLAG_PRESERVE_CURVES`).
+3. Show `tdu_project_summary_json`: performers, sets, warnings. Curved moves are kept exact
+   as paths automatically; `TDU_FLAG_PRESERVE_CURVES` only affects OpenMarch targets.
 4. `tdu_export(…, TDU_FORMAT_FIELDWORK, temp path, …)`, then open the result with Fieldwork's
    own `DocumentFile.open`.
