@@ -251,7 +251,8 @@ pub unsafe extern "C" fn tdu_export(
         let overwrite = flags & TDU_FLAG_OVERWRITE != 0;
         let mut owned;
         let mut p = &(*project).0;
-        if flags & TDU_FLAG_PRESERVE_CURVES != 0 {
+        // Fieldwork keeps curved moves exact as per-performer paths, without subsets.
+        if flags & TDU_FLAG_PRESERVE_CURVES != 0 && format != TDU_FORMAT_FIELDWORK {
             owned = p.clone();
             split_curved_moves(&mut owned);
             p = &owned;
@@ -379,7 +380,8 @@ mod tests {
             let mut diags: *mut c_char = std::ptr::null_mut();
             let rc = tdu_export(project, TDU_FORMAT_FIELDWORK, c_out.as_ptr(), TDU_FLAG_PRESERVE_CURVES, &mut diags, &mut err);
             assert_eq!(rc, TDU_OK);
-            assert!(CStr::from_ptr(diags).to_str().unwrap().contains("curve_subsets_added"));
+            let text = CStr::from_ptr(diags).to_str().unwrap();
+            assert!(text.contains("curves_as_paths") && !text.contains("curve_subsets_added"), "{text}");
             tdu_string_free(diags);
 
             let rc = tdu_export(project, TDU_FORMAT_FIELDWORK, c_out.as_ptr(), 0, std::ptr::null_mut(), &mut err);

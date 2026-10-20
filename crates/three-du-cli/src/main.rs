@@ -130,7 +130,8 @@ struct PolicyArgs {
     #[arg(long)]
     overwrite: bool,
     /// Keep curved and follow-the-leader moves exact by adding derived subsets at every
-    /// count where a performer changes direction (changes the page structure).
+    /// count where a performer changes direction (changes the page structure). Fieldwork
+    /// output needs no subsets: it always keeps such moves exact as per-performer paths.
     #[arg(long)]
     preserve_curves: bool,
 }
@@ -367,7 +368,9 @@ fn run(command: Command, ui: &Ui) -> Result<serde_json::Value, Failure> {
             if p.sets.is_empty() && policy.allow_lossy && !matches!(format, OutputFormat::Json) {
                 infer_sets_from_motion(&mut p);
             }
-            if policy.preserve_curves {
+            if policy.preserve_curves && matches!(format, OutputFormat::Fieldwork) {
+                ui.info("Fieldwork keeps curved moves exact as paths; no subsets are added");
+            } else if policy.preserve_curves {
                 let added = split_curved_moves(&mut p);
                 ui.info(format!("added {added} derived subsets to keep curved moves exact"));
             }

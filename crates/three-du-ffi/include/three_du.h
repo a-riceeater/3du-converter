@@ -57,7 +57,8 @@ enum {
     TDU_FLAG_STRICT = 1,          /* refuse any warning */
     TDU_FLAG_ALLOW_LOSSY = 2,     /* accept approximations */
     TDU_FLAG_OVERWRITE = 4,       /* replace an existing output */
-    TDU_FLAG_PRESERVE_CURVES = 8  /* add derived subsets so curved moves stay exact */
+    TDU_FLAG_PRESERVE_CURVES = 8  /* add derived subsets so curved moves stay exact (not
+                                     needed for Fieldwork, which writes paths instead) */
 };
 
 const char *tdu_version(void);

@@ -398,8 +398,8 @@ fn fit_arc(samples: &[Point], i: usize, j: usize, start: Point) -> Option<Segmen
     let angle = |p: Point| (p.1 - center.1).atan2(p.0 - center.0);
     let mut previous = angle(start);
     let (mut total, mut positive, mut negative) = (0.0, true, true);
-    for k in i + 1..=j {
-        let a = angle(samples[k]);
+    for &p in &samples[i + 1..=j] {
+        let a = angle(p);
         let d = wrap(a - previous);
         positive &= d > 0.0;
         negative &= d < 0.0;
