@@ -4,6 +4,7 @@
 //! `packages/DrillDocument`. Units are meters from field center (+x audience right,
 //! +y toward the back sideline), durations in seconds, IDs uppercase UUIDs.
 
+pub mod paths;
 pub mod props;
 pub mod zip;
 
