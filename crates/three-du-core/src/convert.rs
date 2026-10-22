@@ -595,6 +595,14 @@ fn build_coordinates(src: SourceField, overrides: &TransformOverrides, diags: &m
         field_depth_steps: (back_y - front_y).abs() * grid.steps_per_unit_y(),
     };
     let mut transform = overrides.apply(base);
+    // Flipping y makes the other border the front sideline, so the drill is mirrored
+    // about the middle of the field instead of about the old front sideline.
+    let (front_y, back_y) = if overrides.flip_y && overrides.front_y.is_none() {
+        transform.front_y = back_y;
+        (back_y, front_y)
+    } else {
+        (front_y, back_y)
+    };
     let user = !overrides.is_empty();
     if user {
         notes.push("transform adjusted by user overrides".into());
