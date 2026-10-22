@@ -328,8 +328,8 @@ fn database(p: &DrillProject) -> Result<(Vec<u8>, bool), ExportError> {
         "INSERT INTO field (singleton, name, preset, length, width, step_size, side_labels, front_label, back_label) VALUES (1, ?1, 'custom', ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             "Football field (from .3du)",
-            x1 - x0,
-            y_back - y_front,
+            (x1 - x0).abs(),
+            (y_back - y_front).abs(),
             t.step_meters(),
             side_labels,
             f.front_label.to_lowercase(),

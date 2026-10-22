@@ -267,3 +267,37 @@ fn damaged_paths_are_rejected() {
     members[0].1 = serde_json::to_vec_pretty(&manifest).unwrap();
     assert!(validate_bytes(&zip::write(&members).unwrap()).unwrap_err().to_string().contains("drill.paths.v1"));
 }
+
+#[test]
+fn mirrored_drills_keep_positive_field_dimensions() {
+    for (flip_x, flip_y) in [(true, false), (false, true), (true, true)] {
+        let mut opts = ReadOptions::default();
+        opts.convert.transform.flip_x = flip_x;
+        opts.convert.transform.flip_y = flip_y;
+        let p = read_bytes(&encode(&sample_show()), opts).unwrap();
+        let bytes = build_archive(&p, &plan(&p)).unwrap();
+        validate_bytes(&bytes).unwrap_or_else(|e| panic!("flip_x {flip_x}, flip_y {flip_y}: {e}"));
+        let (length, width): (f64, f64) = open_db(&bytes).query_row("SELECT length, width FROM field", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        let plain = project();
+        let plain_bytes = build_archive(&plain, &plan(&plain)).unwrap();
+        let expected: (f64, f64) = open_db(&plain_bytes).query_row("SELECT length, width FROM field", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert!((length - expected.0).abs() < 1e-9 && (width - expected.1).abs() < 1e-9, "flip_x {flip_x}, flip_y {flip_y}");
+    }
+}
+
+#[test]
+fn mirroring_reflects_positions_about_the_field_center() {
+    let plain = project();
+    let mut opts = ReadOptions::default();
+    opts.convert.transform.flip_x = true;
+    opts.convert.transform.flip_y = true;
+    let flipped = read_bytes(&encode(&sample_show()), opts).unwrap();
+    let (a, b) = (plain.coordinates.transform, flipped.coordinates.transform);
+    for track in &plain.positions {
+        for [x, y] in track.xy.iter().flatten() {
+            let (px, py) = a.to_meters_centered(*x as f64, *y as f64);
+            let (qx, qy) = b.to_meters_centered(*x as f64, *y as f64);
+            assert!((qx + px).abs() < 1e-9 && (qy + py).abs() < 1e-9, "({px}, {py}) mirrored to ({qx}, {qy})");
+        }
+    }
+}
