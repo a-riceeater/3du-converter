@@ -1,12 +1,14 @@
 //! Finds where the drill's count clock sits in a recording.
 //!
-//! 1. An onset-strength envelope is computed from the audio (log-magnitude spectral flux,
-//!    1024-sample Hann window, 128-sample hop).
-//! 2. Every candidate offset is scored by summing the envelope at the drill's beat times
-//!    (each count's time plus the offset). Because the drill's tempo changes, only the true
-//!    offset lines up every section, so the best score stands out from its rivals.
-//! 3. The peak is refined to sub-hop precision, and each set's neighborhood is re-aligned
-//!    locally to measure drift.
+//! 1. Onset-strength envelopes are computed from the audio in ten frequency bands
+//!    (log-magnitude spectral flux, 1024-sample Hann window, 128-sample hop), so that a
+//!    metronome in the background is not buried under the band's attacks.
+//! 2. Every candidate offset is scored by summing the envelopes at the drill's beat times
+//!    (each count's time plus the offset), window by window, with each band and window
+//!    normalized on its own. Because the drill's tempo changes, only the true offset lines
+//!    up every section, so the best score stands out from its rivals.
+//! 3. Each window's best offset near the peak is refined to sub-hop precision; their median
+//!    is the result, and each set's neighborhood is re-aligned locally to measure drift.
 
 use serde::Serialize;
 
@@ -70,17 +72,41 @@ fn fft(re: &mut [f32], im: &mut [f32]) {
     }
 }
 
-/// Onset strength per hop, normalized to zero mean and unit variance.
-pub fn onset_envelope(audio: &Audio) -> Vec<f32> {
+/// Upper edges (Hz) of the onset bands. A metronome or click track usually has a band to
+/// itself (often far above the music's fundamentals), where a broadband envelope would bury
+/// it under the band's attacks. Bands above the Nyquist frequency are left out.
+const BAND_EDGES: [f64; 10] = [200.0, 400.0, 800.0, 1600.0, 3200.0, 6400.0, 9000.0, 12000.0, 16000.0, f64::INFINITY];
+
+/// Moving average of `v` over `±half` entries.
+fn moving_average(v: &[f32], half: usize) -> Vec<f64> {
+    let mut prefix = vec![0f64; v.len() + 1];
+    for (i, x) in v.iter().enumerate() {
+        prefix[i + 1] = prefix[i] + *x as f64;
+    }
+    (0..v.len())
+        .map(|i| {
+            let (a, b) = (i.saturating_sub(half), (i + half + 1).min(v.len()));
+            (prefix[b] - prefix[a]) / (b - a) as f64
+        })
+        .collect()
+}
+
+/// Onset strength per hop in each frequency band of `BAND_EDGES` (log-magnitude spectral
+/// flux), with the slowly varying loudness removed and each band scaled to unit RMS.
+pub fn band_envelopes(audio: &Audio) -> Vec<Vec<f32>> {
     let x = &audio.mono;
     if x.len() < WINDOW {
         return vec![];
     }
+    let bin_hz = audio.sample_rate as f64 / WINDOW as f64;
+    let band_of: Vec<usize> = (0..WINDOW / 2).map(|k| BAND_EDGES.iter().position(|&e| k as f64 * bin_hz < e).unwrap_or(BAND_EDGES.len() - 1)).collect();
+    let bands = band_of[WINDOW / 2 - 1] + 1;
     let window: Vec<f32> = (0..WINDOW).map(|i| 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / WINDOW as f32).cos()).collect();
     let frames = (x.len() - WINDOW) / HOP + 1;
     let mut prev = vec![0f32; WINDOW / 2];
-    let mut env = Vec::with_capacity(frames);
+    let mut env = vec![Vec::with_capacity(frames); bands];
     let (mut re, mut im) = (vec![0f32; WINDOW], vec![0f32; WINDOW]);
+    let mut flux = vec![0f32; bands];
     for f in 0..frames {
         let s = f * HOP;
         for i in 0..WINDOW {
@@ -88,27 +114,44 @@ pub fn onset_envelope(audio: &Audio) -> Vec<f32> {
             im[i] = 0.0;
         }
         fft(&mut re, &mut im);
-        let mut flux = 0f32;
+        flux.fill(0.0);
         for k in 1..WINDOW / 2 {
             let mag = (1.0 + 100.0 * (re[k] * re[k] + im[k] * im[k]).sqrt()).ln();
-            flux += (mag - prev[k]).max(0.0);
+            flux[band_of[k]] += (mag - prev[k]).max(0.0);
             prev[k] = mag;
         }
         // The first frame has nothing to compare with; it only primes `prev`.
-        env.push(if f == 0 { 0.0 } else { flux });
+        for (e, v) in env.iter_mut().zip(&flux) {
+            e.push(if f == 0 { 0.0 } else { *v });
+        }
     }
     // Remove the slowly varying loudness (0.5 s moving average) and keep rising edges.
     let w = (0.5 * audio.sample_rate as f64 / HOP as f64) as usize;
-    let mut prefix = vec![0f64; env.len() + 1];
-    for (i, v) in env.iter().enumerate() {
-        prefix[i + 1] = prefix[i] + *v as f64;
-    }
-    let mut out: Vec<f32> = (0..env.len())
-        .map(|i| {
-            let (a, b) = (i.saturating_sub(w), (i + w + 1).min(env.len()));
-            (env[i] as f64 - (prefix[b] - prefix[a]) / (b - a) as f64).max(0.0) as f32
+    env.into_iter()
+        .map(|e| {
+            let avg = moving_average(&e, w);
+            let mut out: Vec<f32> = e.iter().zip(&avg).map(|(v, a)| (*v as f64 - a).max(0.0) as f32).collect();
+            let rms = (out.iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / out.len() as f64).sqrt();
+            if rms > 1e-12 {
+                out.iter_mut().for_each(|v| *v = (*v as f64 / rms) as f32);
+            }
+            out
         })
-        .collect();
+        .collect()
+}
+
+/// The bands' mean onset strength (never negative).
+fn band_mean(bands: &[Vec<f32>]) -> Vec<f32> {
+    let n = bands.first().map_or(0, Vec::len);
+    (0..n).map(|i| bands.iter().map(|b| b[i]).sum::<f32>() / bands.len() as f32).collect()
+}
+
+/// Onset strength per hop over all bands, normalized to zero mean and unit variance.
+pub fn onset_envelope(audio: &Audio) -> Vec<f32> {
+    let mut out = band_mean(&band_envelopes(audio));
+    if out.is_empty() {
+        return out;
+    }
     let mean = out.iter().map(|v| *v as f64).sum::<f64>() / out.len() as f64;
     let var = out.iter().map(|v| (*v as f64 - mean).powi(2)).sum::<f64>() / out.len() as f64;
     let sd = var.sqrt().max(1e-9);
@@ -320,29 +363,121 @@ pub fn local_offsets(audio: &Audio, beats: &[f64], center: f64, spread: f64, chu
     out
 }
 
+/// Beats per scoring window.
+const WINDOW_BEATS: usize = 16;
+/// How far each window may sit from the global offset while still supporting it (s). A
+/// performance or recording that drifts by a few tens of milliseconds over minutes still has
+/// one clear offset.
+const DRIFT_TOLERANCE: f64 = 0.015;
+/// How far a window's own best offset is searched from the global one (s).
+const LOCAL_REACH: f64 = 0.06;
+
+/// Scores of one stretch of beats over a grid of offsets. Each band's score (its mean
+/// envelope at the beats) is a robust z-score against the same band at the other offsets,
+/// so a quiet passage counts as much as a loud one and a band that only carries the click
+/// counts as much as the band's whole sound. The window's score is the bands' mean.
+struct WindowScore<'a> {
+    bands: &'a [Vec<f32>],
+    fr: f64,
+    beats: &'a [f64],
+    /// Median and scale per band (scale 0: the band is flat here and is ignored).
+    stats: Vec<(f64, f64)>,
+    curve: Vec<f64>,
+}
+
+impl<'a> WindowScore<'a> {
+    fn new(bands: &'a [Vec<f32>], fr: f64, beats: &'a [f64], grid: &[f64]) -> Self {
+        let mut stats = Vec::with_capacity(bands.len());
+        let mut curve = vec![0f64; grid.len()];
+        for env in bands {
+            let raw: Vec<f64> = grid.iter().map(|&o| score(env, fr, beats, o)).collect();
+            let mut sorted = raw.clone();
+            sorted.sort_by(f64::total_cmp);
+            let med = sorted[sorted.len() / 2];
+            let mut dev: Vec<f64> = raw.iter().map(|v| (v - med).abs()).collect();
+            dev.sort_by(f64::total_cmp);
+            let scale = 1.4826 * dev[dev.len() / 2];
+            if scale > 1e-9 {
+                curve.iter_mut().zip(&raw).for_each(|(c, v)| *c += (v - med) / scale / bands.len() as f64);
+            }
+            stats.push((med, if scale > 1e-9 { scale } else { 0.0 }));
+        }
+        WindowScore { bands, fr, beats, stats, curve }
+    }
+
+    /// The score at any offset (off the grid too).
+    fn at(&self, o: f64) -> f64 {
+        let n = self.bands.len() as f64;
+        self.bands.iter().zip(&self.stats).filter(|(_, s)| s.1 > 0.0).map(|(env, (med, scale))| (score(env, self.fr, self.beats, o) - med) / scale / n).sum()
+    }
+
+    /// Best offset within `±reach` of `center`, refined to 0.25 ms, with its score.
+    fn local_best(&self, grid: &[f64], center: f64, reach: f64) -> (f64, f64) {
+        let step = 1.0 / self.fr;
+        let coarse = grid.iter().zip(&self.curve).filter(|(o, _)| (*o - center).abs() <= reach).max_by(|a, b| a.1.total_cmp(b.1)).map_or(center, |(o, _)| *o);
+        let mut best = (coarse, self.at(coarse));
+        let mut o = coarse - step;
+        while o <= coarse + step {
+            let s = self.at(o);
+            if s > best.1 && (o - center).abs() <= reach {
+                best = (o, s);
+            }
+            o += 0.00025;
+        }
+        best
+    }
+}
+
 /// Aligns beat times `beats` (seconds on the drill clock, one per count) to the audio.
 /// `search_range` bounds the offset; `sets` are beat indices used for the drift check.
+///
+/// The beats are scored in windows of `WINDOW_BEATS`. A window at one tempo fits every offset
+/// that is a whole number of its beats from the true one; summed over windows at different
+/// tempos, only the true offset is supported everywhere. Each window may sit within
+/// `DRIFT_TOLERANCE` of the global offset, and the result is the median of the windows' own
+/// best offsets near it.
 pub fn align(audio: &Audio, beats: &[f64], search_range: (f64, f64), sets: &[usize]) -> Alignment {
-    let env = onset_envelope(audio);
+    let bands = band_envelopes(audio);
     let fr = frame_rate(audio);
-    let (offset, best) = search(&env, fr, beats, search_range.0, search_range.1);
+    let step = 1.0 / fr;
+    let grid: Vec<f64> = (0..).map(|i| search_range.0 + i as f64 * step).take_while(|o| *o <= search_range.1 + 1e-9).collect();
+    if bands.is_empty() || beats.is_empty() || grid.is_empty() {
+        let offset = search_range.0.max(0.0).min(search_range.1);
+        return Alignment { offset_seconds: offset, peak_ratio: 1.0, beat_hit_rate: 0.0, chance_hit_rate: 0.0, max_drift_seconds: 0.0, beats_used: beats.len(), confident: false };
+    }
+
+    let size = beats.len().div_ceil(beats.len().div_ceil(WINDOW_BEATS));
+    let windows: Vec<WindowScore> = beats.chunks(size).map(|w| WindowScore::new(&bands, fr, w, &grid)).collect();
+    let reach = (DRIFT_TOLERANCE * fr).round() as usize;
+    let mut total = vec![0f64; grid.len()];
+    for w in &windows {
+        for (i, t) in total.iter_mut().enumerate() {
+            let (a, b) = (i.saturating_sub(reach), (i + reach + 1).min(grid.len()));
+            *t += w.curve[a..b].iter().copied().fold(f64::MIN, f64::max) / windows.len() as f64;
+        }
+    }
+    let (peak, best) = total.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map(|(i, s)| (grid[i], *s)).unwrap();
 
     // Strongest competing offset at least ~one beat (≥ 150 ms) away.
-    let step = 1.0 / fr;
-    let mut rival = f64::MIN;
-    let mut o = search_range.0;
-    while o <= search_range.1 {
-        if (o - offset).abs() >= 0.15 {
-            rival = rival.max(score(&env, fr, beats, o));
-        }
-        o += step;
-    }
+    let rival = grid.iter().zip(&total).filter(|(o, _)| (*o - peak).abs() >= 0.15).map(|(_, s)| *s).fold(f64::MIN, f64::max);
     let peak_ratio = if rival > 0.0 { best / rival } else { f64::INFINITY };
 
-    // A beat "hits" when the envelope peaks above the mean within ±35 ms of it.
+    let mut locals: Vec<f64> = windows.iter().filter(|w| w.stats.iter().any(|s| s.1 > 0.0)).map(|w| w.local_best(&grid, peak, LOCAL_REACH).0).collect();
+    locals.sort_by(f64::total_cmp);
+    let offset = match locals.len() {
+        0 => peak,
+        n if n % 2 == 1 => locals[n / 2],
+        n => (locals[n / 2 - 1] + locals[n / 2]) / 2.0,
+    };
+
+    // A beat "hits" when, within ±35 ms of it, the onset strength reaches three times its
+    // average over the surrounding 3 s.
+    let mean = band_mean(&bands);
+    let local_avg = moving_average(&mean, (1.5 * fr) as usize);
+    let relative: Vec<f32> = mean.iter().zip(&local_avg).map(|(v, a)| if *a > 1e-9 { (*v as f64 / a) as f32 } else { 0.0 }).collect();
     let hit_rate = |o: f64| {
-        let hits = beats.iter().filter(|b| (-35..=35).step_by(5).any(|ms| sample(&env, fr, *b + o + ms as f64 / 1000.0) > 1.0)).count();
-        hits as f64 / beats.len().max(1) as f64
+        let hits = beats.iter().filter(|b| (-35..=35).step_by(5).any(|ms| sample(&relative, fr, *b + o + ms as f64 / 1000.0) > 3.0)).count();
+        hits as f64 / beats.len() as f64
     };
     let beat_hit_rate = hit_rate(offset);
     let chance_hit_rate = (hit_rate(offset + 0.173) + hit_rate(offset - 0.211) + hit_rate(offset + 0.097)) / 3.0;
@@ -354,8 +489,8 @@ pub fn align(audio: &Audio, beats: &[f64], search_range: (f64, f64), sets: &[usi
         if end <= start + 4 || end > beats.len() {
             continue;
         }
-        let local = &beats[start..end];
-        let (lo, _) = search(&env, fr, local, offset - 0.08, offset + 0.08);
+        let local = WindowScore::new(&bands, fr, &beats[start..end], &grid);
+        let (lo, _) = local.local_best(&grid, offset, 0.08);
         max_drift = max_drift.max((lo - offset).abs());
     }
 
