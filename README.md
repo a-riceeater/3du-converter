@@ -55,6 +55,23 @@ cargo build --release -p three-du-cli
 
 Outputs are validated, written to a temporary file, and renamed into place only when valid.
 
+### Aligning with a recording
+
+With `--audio`, count 0 is placed in the recording in one of two ways:
+
+- **One offset** (the default). The whole drill is shifted by a single time, found
+  automatically or given with `--audio-offset`. Every count keeps the drill's own tempo, so it
+  suits a recording made to a metronome. If the band drifts, the counts drift with it.
+- **Beat by beat** (`--follow-audio`). Every count is placed on its own beat in the recording,
+  starting from that offset. The score's tempo marks still show the drill's tempos, but
+  playback follows the recording. Use it for live performances, or for any passage where the
+  band slows or rushes. When the offset is confident or given, each beat may move up to
+  0.25 s from the drill clock (2.5 s otherwise). Its accuracy can rarely be proven against
+  chance, so it usually needs `--allow-lossy`.
+
+Either way, listen to `--click-check` before trusting the result. See
+[MusicXML export and audio alignment](docs/MUSICXML.md) for how it works.
+
 Exit codes:
 
 | Code | Meaning |
