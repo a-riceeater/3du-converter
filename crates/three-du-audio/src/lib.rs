@@ -107,6 +107,54 @@ mod tests {
         assert!(t.confident && t.onset_rate > t.constant_offset_onset_rate);
     }
 
+    /// Adds a decaying attack at `t` s: a sine at `freq` Hz, or low rumbling noise when `freq` is 0.
+    fn add_attack(x: &mut [f32], rate: u32, t: f64, freq: f32, amp: f32, seed: u32) {
+        let (mut s, mut low) = (seed | 1, 0f32);
+        let start = (t * rate as f64) as usize;
+        for i in 0..(0.15 * rate as f64) as usize {
+            let Some(v) = x.get_mut(start + i) else { break };
+            let u = i as f32 / rate as f32;
+            let wave = if freq > 0.0 {
+                (u * 2.0 * std::f32::consts::PI * freq).sin()
+            } else {
+                s ^= s << 13;
+                s ^= s >> 17;
+                s ^= s << 5;
+                low += 0.05 * ((s as f32 / u32::MAX as f32 - 0.5) * 8.0 - low);
+                low
+            };
+            *v += amp * wave * (-u * if freq > 0.0 { 150.0 } else { 25.0 }).exp();
+        }
+    }
+
+    #[test]
+    fn a_quiet_metronome_decides_against_a_loud_band() {
+        // Quiet passages at 120 and 96 BPM with only the metronome, around a loud 160 BPM
+        // section where the band plays every beat. The recording has drifted 25 ms by the loud
+        // section, and there a one-beat-late offset fits as well as the true one.
+        let rate = 22050;
+        let mut beats: Vec<f64> = (1..=24).map(|k| k as f64 * 0.5).collect();
+        beats.extend((1..=48).map(|k| 12.0 + k as f64 * 0.375));
+        beats.extend((1..=24).map(|k| 30.0 + k as f64 * 0.625));
+        let loud = 24..72;
+        let (offset, drift) = (0.4, 0.025);
+        let shift = |k: usize| offset + if k < loud.start { 0.0 } else { drift };
+        let mut x: Vec<f32> = (0..47 * rate as usize).map(|i| ((i as f32 * 12.9898).sin() * 43758.547).fract() * 0.01).collect();
+        for (k, b) in beats.iter().enumerate() {
+            add_attack(&mut x, rate, b + shift(k), 7000.0, 0.15, 0);
+            if loud.contains(&k) {
+                add_attack(&mut x, rate, b + shift(k), 0.0, 3.0, k as u32 * 7919);
+            }
+        }
+        let audio = Audio { sample_rate: rate, channels: 1, frames: x.len() as u64, mono: x };
+        let a = align::align(&audio, &beats, (-1.0, 2.0), &[24, 48, 72, 96]);
+        assert!(a.offset_seconds > offset - 0.003 && a.offset_seconds < offset + drift + 0.003, "{a:?}");
+        assert!(a.confident, "{a:?}");
+        let t = align::track_beats(&audio, &beats, a.offset_seconds, tracking_window(true));
+        let worst = t.times.iter().enumerate().map(|(k, v)| (v - beats[k] - shift(k)).abs()).fold(0.0, f64::max);
+        assert!(worst < 0.006, "worst beat error {worst}");
+    }
+
     #[test]
     fn noise_is_not_confident() {
         let p = read_bytes(&encode(&sample_show()), ReadOptions::default()).unwrap();

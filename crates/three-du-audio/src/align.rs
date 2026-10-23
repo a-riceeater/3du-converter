@@ -287,8 +287,10 @@ pub fn track_beats(audio: &Audio, beats: &[f64], offset: f64, window: f64) -> Be
             confident: false,
         };
     }
-    // The cap flattens the tops of clear onsets; each beat moves to its onset's true peak.
-    let times: Vec<f64> = dp_track(&env, fr, beats, offset, window).iter().map(|&t| peak_near(&relative, fr, t, 0.015)).collect();
+    // The cap flattens the tops of clear onsets, so each beat moves to its onset's peak in all
+    // bands together (the envelope `ATTACK_POSITION` was calibrated on).
+    let all = relative_onsets(&bands, &vec![1.0; bands.len()], fr);
+    let times: Vec<f64> = dp_track(&env, fr, beats, offset, window).iter().map(|&t| peak_near(&all, fr, t, 0.015)).collect();
     let strong =|e: &[f32], t: f64| sample(e, fr, t) > STRONG_ONSET as f64;
     let rate = |e: &[f32], ts: &[f64]| ts.iter().filter(|&&t| strong(e, t)).count() as f64 / n as f64;
     let onset_rate = rate(&env, &times);
@@ -438,15 +440,23 @@ const DRIFT_TOLERANCE: f64 = 0.015;
 /// How far a window's own best offset is searched from the global one (s).
 const LOCAL_REACH: f64 = 0.06;
 
+/// Mean and standard deviation of `v`; the deviation is 0 when `v` is flat.
+fn mean_sd(v: &[f64]) -> (f64, f64) {
+    let mean = v.iter().sum::<f64>() / v.len() as f64;
+    let sd = (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / v.len() as f64).sqrt();
+    (mean, if sd > 1e-9 { sd } else { 0.0 })
+}
+
 /// Scores of one stretch of beats over a grid of offsets. Each band's score (its mean
-/// envelope at the beats) is a robust z-score against the same band at the other offsets,
+/// envelope at the beats) is a z-score against the same band at the other offsets,
 /// so a quiet passage counts as much as a loud one and a band that only carries the click
-/// counts as much as the band's whole sound. The window's score is the bands' mean.
+/// counts as much as the band's whole sound. The window's score is the bands' mean, normalized
+/// the same way (`at` leaves out that last step, which never moves a window's best offset).
 struct WindowScore<'a> {
     bands: &'a [Vec<f32>],
     fr: f64,
     beats: &'a [f64],
-    /// Median and scale per band (scale 0: the band is flat here and is ignored).
+    /// Mean and standard deviation per band (0: the band is flat here and is ignored).
     stats: Vec<(f64, f64)>,
     curve: Vec<f64>,
 }
@@ -457,16 +467,16 @@ impl<'a> WindowScore<'a> {
         let mut curve = vec![0f64; grid.len()];
         for env in bands {
             let raw: Vec<f64> = grid.iter().map(|&o| score(env, fr, beats, o)).collect();
-            let mut sorted = raw.clone();
-            sorted.sort_by(f64::total_cmp);
-            let med = sorted[sorted.len() / 2];
-            let mut dev: Vec<f64> = raw.iter().map(|v| (v - med).abs()).collect();
-            dev.sort_by(f64::total_cmp);
-            let scale = 1.4826 * dev[dev.len() / 2];
-            if scale > 1e-9 {
+            let (med, scale) = mean_sd(&raw);
+            if scale > 0.0 {
                 curve.iter_mut().zip(&raw).for_each(|(c, v)| *c += (v - med) / scale / bands.len() as f64);
             }
-            stats.push((med, if scale > 1e-9 { scale } else { 0.0 }));
+            stats.push((med, scale));
+        }
+        // Every window gets the same say, however many bands carry its beats.
+        let (med, scale) = mean_sd(&curve);
+        if scale > 0.0 {
+            curve.iter_mut().for_each(|c| *c = (*c - med) / scale);
         }
         WindowScore { bands, fr, beats, stats, curve }
     }
