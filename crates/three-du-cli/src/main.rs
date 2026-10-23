@@ -492,7 +492,8 @@ fn audio_sync(p: &DrillProject, args: &AudioArgs, ui: &Ui, always_track: bool) -
     }
     if args.follow_audio || always_track {
         let beats = three_du_audio::drill_beats(p);
-        let track = three_du_audio::align::track_beats(&audio, &beats, args.audio_offset.unwrap_or(global.offset_seconds), 2.5);
+        let window = three_du_audio::tracking_window(args.audio_offset.is_some() || global.confident);
+        let track = three_du_audio::align::track_beats(&audio, &beats, args.audio_offset.unwrap_or(global.offset_seconds), window);
         sync.notes.push((
             "beat-tracking".into(),
             format!(

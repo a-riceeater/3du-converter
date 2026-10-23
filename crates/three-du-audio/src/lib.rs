@@ -27,6 +27,17 @@ pub fn drill_beats(p: &DrillProject) -> Vec<f64> {
     p.timeline.count_times_seconds[1..=end.min(p.timeline.count_len().saturating_sub(1))].to_vec()
 }
 
+/// How far (s) the beat tracker may move each beat from the drill clock: a little when the
+/// offset is known (a confident alignment or one the user gave), so that the tracker absorbs
+/// drift without hopping between the beat and the band's off-beats, and a lot when it is not.
+pub fn tracking_window(offset_known: bool) -> f64 {
+    if offset_known {
+        0.25
+    } else {
+        2.5
+    }
+}
+
 /// Aligns the drill with a recording. The offset is searched from 2 s before the audio
 /// starts up to the point where the drill would no longer fit in the recording.
 pub fn align_project(p: &DrillProject, audio: &Audio) -> Alignment {

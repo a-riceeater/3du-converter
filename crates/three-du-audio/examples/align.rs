@@ -11,7 +11,7 @@ fn main() {
     let a = three_du_audio::align_project(&project, &audio);
     println!("{a:#?}");
     let beats = three_du_audio::drill_beats(&project);
-    let t = three_du_audio::align::track_beats(&audio, &beats, a.offset_seconds, 2.5);
+    let t = three_du_audio::align::track_beats(&audio, &beats, a.offset_seconds, three_du_audio::tracking_window(a.confident));
     println!(
         "beat tracking: onset rate {:.2} (single offset {:.2}, chance {:.2}), tempo deviation median {:.3} max {:.3}, confident {}",
         t.onset_rate, t.constant_offset_onset_rate, t.chance_onset_rate, t.median_tempo_deviation, t.max_tempo_deviation, t.confident
